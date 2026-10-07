@@ -1,0 +1,267 @@
+#!/usr/bin/env bash
+# Workstation-side orchestration controller for the ds4flash TP=3 ring
+# across three DGX Sparks. Companions: launch/ds4flash-tp3-spark (capacity
+# profile, node-local) and launch/ds4flash-tp3-karmic-spark (speed profile,
+# node-local). Validated end-to-end 2026-10-03/04.
+#
+# The profile is selected by which env file you point the controller at:
+#   ./launch/ds4flash-tp3-up ...                                  # SPEED (default)
+#   ENV_SRC=config/cluster.env.capacity ./launch/ds4flash-tp3-up ...  # CAPACITY
+#
+# Every lane-affecting verb is gated behind --yes. A failed start captures
+# all three rank logs for forward diagnosis instead of tearing anything
+# down.
+#
+#   ./launch/ds4flash-tp3-up preflight        # read-only checks on all three boxes
+#   ./launch/ds4flash-tp3-up resolve-digest   # print the image digest to pin in the env
+#   ./launch/ds4flash-tp3-up pull-images      # docker pull on all three boxes
+#   ./launch/ds4flash-tp3-up stage-env        # ship env + helper + patches to the boxes
+#   ./launch/ds4flash-tp3-up start --yes      # workers first, then head; bounded watch
+#   ./launch/ds4flash-tp3-up prewarm          # tiny + ~15K-token JIT warmup (idempotent)
+#   ./launch/ds4flash-tp3-up stop --yes
+#   ./launch/ds4flash-tp3-up status|logs
+set -euo pipefail
+
+RECIPE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ENV_SRC="${ENV_SRC:-$RECIPE_ROOT/config/cluster.env}"
+LOG_DIR="$RECIPE_ROOT/logs"
+
+# EDIT: ssh targets for your three boxes (head first), or export BOX_*.
+BOX_HEAD="${BOX_HEAD:-user@spark-head.local}"
+BOX_W1="${BOX_W1:-user@spark-a.local}"
+BOX_W2="${BOX_W2:-user@spark-b.local}"
+
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8)
+LOCK_DIR="$HOME/.local/state/ds4flash-tp3.lock"
+STAGE_DIR='~/ds4flash-tp3'
+LIBEXEC_DIR='~/.local/libexec/ds4flash-tp3'
+resident_pattern="${RESIDENT_PATTERN:-vllm|sglang|exl|rank[0-9]}"
+
+env_val() { grep -E "^$1=" "$ENV_SRC" | tail -1 | cut -d= -f2- | sed 's/[[:space:]]*#.*$//' | tr -d "\"'"; }
+
+stack() { env_val STACK; }
+
+# Per-stack wiring: node helper, staged env file name, patch dir + files,
+# and the health-watch bound (speed boots take ~14 min: spec autotune +
+# kernel priming + warmup — do not call it hung before ~15 min).
+stack_bits() {
+  case "$(stack)" in
+    karmic)
+      HELPER_SRC="$RECIPE_ROOT/launch/ds4flash-tp3-karmic-spark"
+      HELPER_NAME='ds4flash-tp3-karmic-spark'
+      STAGED_ENV='.env.tp3-ds-karmic'
+      PATCH_DIR='patches-karmic'
+      PATCH_FILES=(config.py v4-attention.py v4-model.py)
+      HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-1500}" ;;
+    chthonic|'')
+      HELPER_SRC="$RECIPE_ROOT/launch/ds4flash-tp3-spark"
+      HELPER_NAME='ds4flash-tp3-spark'
+      STAGED_ENV='.env.tp3-ds'
+      PATCH_DIR='patches'
+      PATCH_FILES=(tilelang.py)
+      HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-900}" ;;
+    *) echo "unknown STACK '$(stack)' in $ENV_SRC (expected karmic|chthonic)" >&2; exit 1 ;;
+  esac
+}
+
+image() { local i d; i="$(env_val IMAGE)"; d="$(env_val IMAGE_DIGEST)"; echo "${i}${d:+@$d}"; }
+
+lock() {
+  mkdir -p "$(dirname "$LOCK_DIR")"
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    echo "another ds4flash-tp3-up run holds $LOCK_DIR (delete it if stale)" >&2
+    exit 1
+  fi
+  trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+}
+
+need_yes() {
+  [[ "${1:-}" == "--yes" ]] || {
+    echo "refusing: lane-affecting action requires --yes" >&2
+    exit 1
+  }
+  lock
+}
+
+b() { ssh "${SSH_OPTS[@]}" "$1" "${@:2}"; }
+
+overlap_refusal() {
+  local host=$1 busy
+  busy=$(b "$host" "docker ps --format '{{.Names}}' | grep -Ei '$resident_pattern' || true") || busy=""
+  if [[ -n "$busy" ]]; then echo "REFUSED: $host runs: $busy (park the lane first)" >&2; return 1; fi
+}
+
+local_artifacts_ok() {
+  stack_bits
+  local f
+  [[ -f "$ENV_SRC" ]] || { echo "missing $ENV_SRC" >&2; return 1; }
+  [[ -f "$HELPER_SRC" ]] || { echo "missing $HELPER_SRC" >&2; return 1; }
+  for f in "${PATCH_FILES[@]}"; do
+    [[ -f "$RECIPE_ROOT/$PATCH_DIR/$f" ]] || { echo "missing $RECIPE_ROOT/$PATCH_DIR/$f" >&2; return 1; }
+  done
+}
+
+cmd_preflight() {
+  local_artifacts_ok
+  echo "-- profile: STACK=$(stack) · image $(image)"
+  local rc=0 box model_dir shards complete img links
+  model_dir="$(env_val MODEL_DIR)"
+  for box in "$BOX_HEAD:ds4flash-tp3-head" "$BOX_W1:ds4flash-tp3-worker1" "$BOX_W2:ds4flash-tp3-worker2"; do
+    local host="${box%%:*}" name="${box##*:}"
+    echo "== $host ($name) =="
+    complete=$(b "$host" "test -f '$model_dir/_DOWNLOAD_COMPLETE.json' && echo yes || echo NO") || complete=NO
+    echo "  checkpoint staged: $complete"
+    shards=$(b "$host" "find '$model_dir' -maxdepth 1 -name 'model-?????-of-00048.safetensors' 2>/dev/null | wc -l") || shards=0
+    echo "  shards present:   $shards/$(env_val EXPECTED_SHARDS)"
+    img=$(b "$host" "docker image inspect '$(image)' --format '{{.Id}}' 2>/dev/null || echo MISSING")
+    echo "  image:            $img"
+    links=$(b "$host" "ip -br link | grep -cE 'enp1s0f[01]np[01].*UP'")
+    echo "  CX-7 links UP:    $links"
+    b "$host" "test -e /dev/infiniband" && echo "  /dev/infiniband:  ok" || { echo "  /dev/infiniband:  MISSING"; rc=1; }
+  done
+  echo "-- overlap check: any other resident model lane must be parked before start --"
+  [[ "$rc" -eq 0 ]] && echo "preflight: artifacts ready (lane state not modified)" || { echo "preflight: FAILURES above"; return 1; }
+}
+
+cmd_resolve_digest() {
+  local img digest
+  img="$(env_val IMAGE)"
+  echo "resolving $img (pull happens on the workstation, not the Sparks)..."
+  digest=$(docker pull "$img" 2>/dev/null | tail -1 | grep -oE 'sha256:[a-f0-9]+' | head -1 || true)
+  [[ -n "$digest" ]] || { echo "could not resolve digest locally; run: docker pull $img" >&2; exit 1; }
+  echo "Paste into the profile env you selected:"
+  echo "  IMAGE_DIGEST='$digest'"
+}
+
+cmd_pull_images() {
+  local img; img="$(image)"
+  for host in "$BOX_HEAD" "$BOX_W1" "$BOX_W2"; do
+    echo "== pulling on $host =="
+    b "$host" "docker pull '$img' 2>&1 | tail -2"
+  done
+}
+
+cmd_stage_env() {
+  local_artifacts_ok
+  local host f
+  echo "-- staging STACK=$(stack): $STAGED_ENV + $HELPER_NAME + $PATCH_DIR/"
+  for host in "$BOX_HEAD" "$BOX_W1" "$BOX_W2"; do
+    b "$host" "mkdir -p $LIBEXEC_DIR $STAGE_DIR/$PATCH_DIR"
+    scp -q "${SSH_OPTS[@]}" "$ENV_SRC" "$host:$STAGE_DIR/$STAGED_ENV"
+    scp -q "${SSH_OPTS[@]}" "$HELPER_SRC" "$host:$LIBEXEC_DIR/$HELPER_NAME"
+    for f in "${PATCH_FILES[@]}"; do
+      scp -q "${SSH_OPTS[@]}" "$RECIPE_ROOT/$PATCH_DIR/$f" "$host:$STAGE_DIR/$PATCH_DIR/$f"
+    done
+    b "$host" "chmod 0755 $LIBEXEC_DIR/$HELPER_NAME"
+  done
+  echo "staged env + patches + helper on all three boxes"
+}
+
+cmd_prewarm() {
+  local port model extra_json
+  port="$(env_val API_PORT)"
+  model="$(env_val SERVED_NAME)"
+  # The speed profile's deepseek_v4 parser defaults thinking ON; disable it
+  # for the warmup pings so they stay tiny.
+  extra_json='{}'
+  [[ "$(stack)" == karmic ]] && extra_json='{"chat_template_kwargs":{"thinking":false}}'
+  echo "pre-warming (tiny + ~15K-token request: the first long prefill pays ~2x TTFT in JIT)..."
+  python3 - "$model" "$extra_json" <<'PY' | b "$BOX_HEAD" "cat > /tmp/ds4flash-tp3-prewarm-tiny.json"
+import json, sys
+model, extra = sys.argv[1], (json.loads(sys.argv[2]) if sys.argv[2] != "{}" else {})
+print(json.dumps({
+    "model": model,
+    "messages": [{"role": "user", "content": "ping"}],
+    "max_tokens": 8,
+    **extra,
+}))
+PY
+  python3 - "$model" "$extra_json" <<'PY' | b "$BOX_HEAD" "cat > /tmp/ds4flash-tp3-prewarm-long.json"
+import json, sys
+model, extra = sys.argv[1], (json.loads(sys.argv[2]) if sys.argv[2] != "{}" else {})
+print(json.dumps({
+    "model": model,
+    "messages": [{"role": "user",
+                  "content": "Background: the quarterly logistics review covers inventory, freight, and demand planning. " * 950}],
+    "max_tokens": 8,
+    "temperature": 0,
+    **extra,
+}))
+PY
+  b "$BOX_HEAD" "curl -s --max-time 300 http://127.0.0.1:$port/v1/chat/completions -H 'Content-Type: application/json' -d @/tmp/ds4flash-tp3-prewarm-tiny.json >/dev/null; curl -s --max-time 300 http://127.0.0.1:$port/v1/chat/completions -H 'Content-Type: application/json' -d @/tmp/ds4flash-tp3-prewarm-long.json >/dev/null" || true
+  echo "pre-warm done — steady-state from the next request on"
+}
+
+cmd_start() {
+  need_yes "${1:-}"
+  stack_bits
+  local port; port="$(env_val API_PORT)"
+  for host in "$BOX_W1" "$BOX_W2" "$BOX_HEAD"; do
+    overlap_refusal "$host" || exit 1
+  done
+  echo "starting workers..."
+  b "$BOX_W1" "$LIBEXEC_DIR/$HELPER_NAME start" &
+  b "$BOX_W2" "$LIBEXEC_DIR/$HELPER_NAME start" &
+  wait
+  echo "starting head (engine on :$port)..."
+  b "$BOX_HEAD" "$LIBEXEC_DIR/$HELPER_NAME start"
+  echo "-- bounded health watch: up to $((HEALTH_TIMEOUT / 60)) min (weights + compile + spec autotune on the speed profile) --"
+  local deadline=$(( $(date +%s) + HEALTH_TIMEOUT )) ok=0
+  while (( $(date +%s) < deadline )); do
+    if b "$BOX_HEAD" "curl -sf http://127.0.0.1:$port/health >/dev/null 2>&1"; then ok=1; break; fi
+    sleep 30
+  done
+  if [[ "$ok" == 1 ]]; then
+    echo "head /health OK"
+    cmd_prewarm
+    echo "-- boot-log gates: $( [[ "$(stack)" == karmic ]] && echo 'the two "Padded DeepSeek" lines + DSpark enabled + NCCL banner' || echo 'virtual-TP pad lines + "NCCL version 2.30.7" banner' ); then 'Maximum concurrency' / 'GPU KV cache size' for the honest pool --"
+  else
+    echo "head not healthy after $((HEALTH_TIMEOUT / 60)) min — capturing rank logs for forward diagnosis"
+    mkdir -p "$LOG_DIR"
+    local stamp; stamp="$(date +%Y%m%d-%H%M%S)"
+    b "$BOX_HEAD" "docker logs --tail 200 ds4flash-tp3-head" \
+      > "$LOG_DIR/head-$stamp.log" 2>&1 || true
+    b "$BOX_W1" "docker logs --tail 200 ds4flash-tp3-worker1" \
+      > "$LOG_DIR/worker1-$stamp.log" 2>&1 || true
+    b "$BOX_W2" "docker logs --tail 200 ds4flash-tp3-worker2" \
+      > "$LOG_DIR/worker2-$stamp.log" 2>&1 || true
+    echo "logs captured under $LOG_DIR — diagnose forward; nothing was rolled back"
+  fi
+}
+
+cmd_stop() {
+  need_yes "${1:-}"
+  stack_bits
+  b "$BOX_HEAD" "$LIBEXEC_DIR/$HELPER_NAME stop || true" &
+  b "$BOX_W1" "$LIBEXEC_DIR/$HELPER_NAME stop || true" &
+  b "$BOX_W2" "$LIBEXEC_DIR/$HELPER_NAME stop || true" &
+  wait
+  echo "ring stopped on all three boxes (containers removed; weights staged in place)"
+}
+
+cmd_status() {
+  stack_bits
+  local pair
+  for pair in "$BOX_HEAD:head" "$BOX_W1:worker1" "$BOX_W2:worker2"; do
+    echo "== ${pair##*:} =="
+    b "${pair%%:*}" "$LIBEXEC_DIR/$HELPER_NAME status || true" | sed 's/^/  /'
+  done
+}
+
+cmd_logs() {
+  b "$BOX_HEAD" "docker logs -f --tail 100 ds4flash-tp3-head 2>&1 | grep -viE 'api-key|authorization' "
+}
+
+case "${1:-status}" in
+  preflight)      shift; cmd_preflight "$@" ;;
+  resolve-digest) cmd_resolve_digest ;;
+  pull-images)    lock; cmd_pull_images ;;
+  stage-env)      lock; cmd_stage_env ;;
+  start)          shift; cmd_start "$@" ;;
+  prewarm)        lock; cmd_prewarm ;;
+  stop)           shift; cmd_stop "$@" ;;
+  status)         cmd_status ;;
+  logs)           cmd_logs ;;
+  *) echo "usage: ds4flash-tp3-up {preflight|resolve-digest|pull-images|stage-env|start --yes|prewarm|stop --yes|status|logs}" >&2
+     echo "       ENV_SRC=config/cluster.env.capacity selects the capacity profile" >&2; exit 2 ;;
+esac
