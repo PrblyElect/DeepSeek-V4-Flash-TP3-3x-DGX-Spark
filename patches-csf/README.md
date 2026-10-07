@@ -109,6 +109,43 @@ artifacts); CuTe disk-persistence failures are silently suppressed, so
 an unpersisted artifact is indistinguishable from never-compiled next
 boot — wipe caches via container when in doubt.
 
+## Getting a CSF-capable b12x today (extraction from the public beta channel)
+
+You do not have to wait for the release: the author's beta channel on
+`ghcr.io/local-inference-lab/vllm` already ships working CSF builds,
+and the part you need is **pure Python — architecture-independent** —
+so their amd64-only tags are fine on arm64 Sparks. Extract, never
+execute:
+
+```sh
+docker create --name b12x-src \
+  ghcr.io/local-inference-lab/vllm@sha256:6008f020c23065bef71390194f968af9f5ebbedf57807b1659f876632e4a1067
+docker cp b12x-src:/opt/venv/lib/python3.12/site-packages/b12x ./b12x-beta
+docker rm b12x-src
+python3 -c "from b12x.moe.fused_moe import CsfScalePlanes, Mxfp4CsfWeights; print('ready')"
+```
+
+(The `docker cp` source path is that image's venv layout; if a newer
+beta moves it, `docker export b12x-src | tar -t | grep 'b12x/__init__'`
+finds the current one. The digest above is the build this recipe's CSF
+numbers were measured on; beta tags churn, so pin by digest.)
+
+On a fresh extraction, apply the two fixes documented below before the
+2112 geometry will serve: the compile wait-race (fix intent in the
+section below) and the `_instantiate` retry — a ready diff ships in
+this folder as `b12x-instantiate-retry.patch` (written against
+master's `preparation/session.py`; on a beta extraction the same
+27-line wrapper plus the `_instantiate` → `_instantiate_once` rename
+applies, possibly with fuzz). Then mount the patched directory over
+the image's `b12x` package the way the assembly manifest describes,
+and **verify with a small boot — the symbol check alone is not
+readiness**.
+
+Watch the channel: `…-beta-spark-…` arm64 tags have started appearing,
+which is the upstream signal that official Spark packaging of this
+stack is close. When a released build passes the readiness check and
+a boot, the extraction step can be deleted from this recipe.
+
 ## The second b12x patch the spec boot needed (apply alongside)
 
 The wait-race fix above unblocked the no-spec boots, but the DSpark
