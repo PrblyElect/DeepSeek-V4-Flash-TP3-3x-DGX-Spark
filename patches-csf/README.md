@@ -130,9 +130,10 @@ beta moves it, `docker export b12x-src | tar -t | grep 'b12x/__init__'`
 finds the current one. The digest above is the build this recipe's CSF
 numbers were measured on; beta tags churn, so pin by digest.)
 
-On a fresh extraction, apply the two fixes documented below before the
-2112 geometry will serve: the compile wait-race (fix intent in the
-section below) and the `_instantiate` retry — a ready diff ships in
+On a fresh extraction, apply the two fixes documented in the sections
+above before the
+2112 geometry will serve: the compile wait-race (fix intent further
+up) and the `_instantiate` retry — a ready diff ships in
 this folder as `b12x-instantiate-retry.patch` (written against
 master's `preparation/session.py`; on a beta extraction the same
 27-line wrapper plus the `_instantiate` → `_instantiate_once` rename
@@ -141,7 +142,7 @@ the image's `b12x` package the way the assembly manifest describes,
 and **verify with a small boot — the symbol check alone is not
 readiness**.
 
-Watch the channel: `…-beta-spark-…` arm64 tags have started appearing,
+Watch the channel: `…-beta-spark-���` arm64 tags have started appearing,
 which is the upstream signal that official Spark packaging of this
 stack is close. When a released build passes the readiness check and
 a boot, the extraction step can be deleted from this recipe.
