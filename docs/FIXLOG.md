@@ -1,12 +1,12 @@
 # FIXLOG — the crash ladder from nothing to first light
 
 Window of 2026-10-03/04 (extended through 10-06 by the CSF campaign). Three
-ladders, twenty-eight rungs of distinct root causes, each diagnosed from
+ladders, twenty-nine rungs of distinct root causes, each diagnosed from
 container logs and fixed forward. Recorded verbatim so nobody repeats this
 grind. This is what "nobody has ever run this model at
 TP=3" looks like from the inside — three times: once on the chthonic
 lineage (capacity profile, rungs 1–13), once on the karmic lineage (speed
-profile, rungs 14–23), and once on the CSF port (rungs 24–28).
+profile, rungs 14–23), and once on the CSF port (rungs 24–29).
 
 Re-verified 2026-10-04 on the live lane: ~28 tok/s
 single-stream, a KV pool at the low edge of the ~4.9–5.4M band (8192-era
@@ -192,7 +192,7 @@ shards (~1:50 for 50 shards/rank) → profile run in eager → KV pool →
 - The KV pool sizing jitters ±10% across identical boots (profiling
   watermark) — quote a range, not a point, if you benchmark.
 
-## The third ladder: the CSF (compressed-scales) campaign (rungs 24–28)
+## The third ladder: the CSF (compressed-scales) campaign (rungs 24–29)
 
 Serving the checkpoint in the CSF compressed-scales format (public
 PR #973 loader lineage) at TP=3, then racing it against the fp8 speed
@@ -205,6 +205,7 @@ profile. Toolchain and loader edits: `patches-csf/`, `tools/csf/`.
 | 26 | at the 2112 pad, boots die in weight prep on the compact_micro n64 path ("unplanned CuTe program" under no-compilation); at 2304 they boot | b12x's obligation ready-path adopts a stale program record instead of re-deriving declared coverage, so the compact kernel lazily compiles where compilation is forbidden | three-line fix intent in `patches-csf/README.md` (re-derive via `_compile(required=True)`, union after — it overwrites the dict — then `_wait_programs`). Not env-fixable. 2304 = unpatched fallback |
 | 27 | which base is faster at identical speed settings? | same-day paired A/B, single-variable base swap (k=5, gmu 0.79, cap 144): CSF/2112 measured ~5–10% faster single-stream prose decode (+10% in the paired A/B, whose fp8 control sat at the bottom of its historical band), code-class top-of-band, pool parity-plus (~2.4M), prefill top-of-band; battery clean, cross-base diffs rephrase-class only, ~370K-token cold prefill coherent | **CSF/2112 adopted as the fastest measured configuration** — pending the rung-26 runtime release (rung 24's converter works today). Capacity-style CSF variant (no spec) reaches ~3.6–4.0M pool at 8192, ~5.6–5.8M at 4096 |
 | 28 | would a shorter draft (k=4) trade unused positions for step time? | +~5% prose (under the adoption bar) but −11% code/count class, non-overlapping: acceptance histograms show code-class content accepts deep, and k=4 amputates exactly those positions | k=5 stays; the spec-depth axis is closed {4, 5, 10} for mixed workloads |
+| 29 | does b12x master + the documented wait-race fix serve CSF already? | paired same-stack race: it boots cleanly — zero tracebacks, pool at parity with the speed band (~2.3M), prefill healthy — and spec stays active with acceptance counted, but draft/verify throughput falls far short of the beta build: code-class lands at ~half the beta band, prose at ~three-quarters | master + boot fixes ≠ serving-grade spec; the missing piece is the beta lineage's draft/verify kernel path, not just the declarations. Re-test as a one-variable swap when a public build lands; until then the beta-extraction procedure remains the working path |
 
 Two fork findings worth knowing on any profile: temp-0 output is not
 bit-stable under spec decode + prefix caching (an occasional leading-space
