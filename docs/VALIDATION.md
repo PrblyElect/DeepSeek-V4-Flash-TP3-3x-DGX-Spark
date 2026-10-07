@@ -71,7 +71,7 @@ only in a terminal scrollback don't exist.
   non-overlapping samples, not vibes.
 - Speed settings interact with capture sizes and pool sizes; when a
   faster setting costs memory, publish both variants and the workload
-  each suits (see the capture-size landmine in FIXLOG).
+  each suits (see the capture-size landmine in the README; FIXLOG carries the tuning note).
 - Where our measurement disagrees with the model card's official
   recommendation, we publish both and say which weights the measurement
   was taken on.
