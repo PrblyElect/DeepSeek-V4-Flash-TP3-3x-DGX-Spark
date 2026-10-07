@@ -20,6 +20,11 @@ liability, whether in an action of contract, tort or otherwise, arising from,
 out of or in connection with the software or the use or other dealings in the
 Software.
 
-Note: patches/tilelang.py is a modified copy of an upstream vLLM source file
-and remains under the Apache License 2.0 (see its header); the MIT license
-above covers the original scripts and documentation in this repository.
+Note: several directories carry modified copies of upstream Apache-2.0
+source files, which remain under the Apache License 2.0 (see each file's
+header): patches/tilelang.py, the three files in patches-karmic/, and the
+twelve files in patches-csf/vllm-overlay/. Every modification we made is
+marked in-file by a "--- TP3-recipe patch" comment block (the CSF loader
+at patches-csf/mxfp4_csf_loader.py carries the same markers). The MIT
+license above covers the original scripts and documentation in this
+repository.
