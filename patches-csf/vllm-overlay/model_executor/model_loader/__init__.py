@@ -14,6 +14,7 @@ from vllm.model_executor.model_loader.dummy_loader import DummyModelLoader
 from vllm.model_executor.model_loader.modelexpress_loader import (
     ModelExpressModelLoader,
 )
+# --- TP3-recipe patch: import the CSF loaders (whole file is upstream + the marked lines)
 from vllm.model_executor.model_loader.mxfp4_csf_loader import Mxfp4CsfModelLoader
 from vllm.model_executor.model_loader.nvfp4_csf_loader import Nvfp4CsfModelLoader
 from vllm.model_executor.model_loader.runai_streamer_loader import (
@@ -38,6 +39,7 @@ LoadFormats = Literal[
     "dummy",
     "fastsafetensors",
     "instanttensor",
+    # --- TP3-recipe patch: admit the CSF load formats
     "mxfp4_csf",
     "nvfp4_csf",
     "ipc_cache",
