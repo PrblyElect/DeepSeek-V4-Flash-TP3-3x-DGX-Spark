@@ -1,3 +1,14 @@
+---
+license: mit
+base_model: Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2XDGX
+library_name: vllm
+tags:
+- serving-recipe
+- vllm
+- dgx-spark
+- tensor-parallel
+---
+
 # DeepSeek-V4-Flash at TP=3 across 3× NVIDIA DGX Spark — speed & capacity
 
 **TL;DR** — Serve DeepSeek-V4-Flash (284B total / 13B active, native
