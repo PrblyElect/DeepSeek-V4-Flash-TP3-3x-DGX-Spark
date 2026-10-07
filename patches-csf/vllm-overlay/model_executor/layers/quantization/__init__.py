@@ -38,6 +38,7 @@ QuantizationMethods = Literal[
     "gpt_oss_mxfp4",
     "deepseek_v4_fp8",
     "deepseek_v41_fp8",
+    # --- TP3-recipe patch: admit the CSF quantization methods
     "mxfp4_csf",
     "nvfp4_csf",
     "online",
@@ -156,6 +157,7 @@ def get_quantization_config(quantization: str) -> type[QuantizationConfig]:
     )
     from .moe_wna16 import MoeWNA16Config
     from .mxfp4 import GptOssMxfp4Config, Mxfp4Config
+    # --- TP3-recipe patch: import the CSF quant configs (whole file is upstream + the marked lines)
     from .mxfp4_csf import Mxfp4CsfConfig
     from .nvfp4_csf import Nvfp4CsfConfig
     from .online.base import OnlineQuantizationConfig
