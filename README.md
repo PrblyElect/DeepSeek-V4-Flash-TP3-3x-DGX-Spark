@@ -69,7 +69,7 @@ through the ten-rung bring-up ladder (FIXLOG rungs 14–23), the acceptance
 battery, and a 10-minute 120-request soak. Every headline number below was
 measured on this hardware; the fp8 profiles' numbers on the pinned images,
 and the CSF ladder's on the pinned image plus this repo's port kit as a
-dev overlay (a public CSF-capable runtime is the missing piece — CSF
+dev overlay (a *released* CSF-capable runtime is the missing piece — CSF
 section).
 
 ## The numbers (measured on this hardware, these images)
@@ -261,7 +261,7 @@ tool calls work through the `deepseek_v4` parser with
   checkpoint), 84.3 tok/s peak / 80.1 count-benchmark / 67.6 mean, ~182
   tok/s at 6-way, TTFT 4.1 s @8K → 29.5 s @100K (1.5–2.6K tok/s
   prefill). Our speed profile: **count/code-class decode parity-plus
-  (~100–108), pool parity in its capture-48 variant (~2.7–2.8M at fp8
+  (~100–108), pool parity in its capture-48 variant (~2.7���2.8M at fp8
   KV vs their nvfp4)**, and half the boxes' worth of prefill still
   ahead (1.0–1.06K vs 1.5–2.6K). Their lane also carries the
   garble-fallback note that motivated our fp8-KV choice.
