@@ -142,7 +142,7 @@ the image's `b12x` package the way the assembly manifest describes,
 and **verify with a small boot — the symbol check alone is not
 readiness**.
 
-Watch the channel: `…-beta-spark-���` arm64 tags have started appearing,
+Watch the channel: `…-beta-spark-…` arm64 tags have started appearing,
 which is the upstream signal that official Spark packaging of this
 stack is close. When a released build passes the readiness check and
 a boot, the extraction step can be deleted from this recipe.
