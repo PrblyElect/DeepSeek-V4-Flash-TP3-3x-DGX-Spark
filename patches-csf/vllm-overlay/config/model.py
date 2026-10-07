@@ -1284,6 +1284,7 @@ class ModelConfig:
                 "mxfp8",
                 "modelopt_mixed",
                 "exl3",
+                # --- TP3-recipe patch: allow the CSF quant overrides
                 "mxfp4_csf",
                 "nvfp4_csf",
                 # Ensure heavy backends are probed last to avoid unnecessary
