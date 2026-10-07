@@ -7,7 +7,9 @@ decode at ~100+ tok/s on code-class streams (speed, DSpark k=5), or a
 ~7.5M-token KV pool ≈ 7 simultaneous full-1M-context sessions
 (capacity). Digest-pinned images, three crash-ladder FIXLOGs,
 acceptance gates, and a measured landmine ledger are included.
-Bring-up is four commands — see **Quick start** below.
+Bring-up is four commands — see **Quick start** below. Both profiles
+are sized to share the boxes: host headroom for co-tenant services is
+part of the spec (**Headroom by design**).
 
 **Two validated serving profiles for DeepSeek-V4-Flash (the 0731-lineage
 checkpoint — 284B total / 13B active, full native weight in its mixed
@@ -95,6 +97,23 @@ be the more predictable choice.
 Prefill is the honest weak axis on both profiles — see the comparison
 below for what other lanes publish, and the roadmap for the known levers.
 
+### Headroom by design — the profiles share the boxes
+
+These are working-stack recipes, not whole-box benchmarks. The shipped
+defaults sit deliberately below the measured ceilings so the same three
+Sparks keep carrying the rest of a live stack beside the lane —
+rerankers, embeddings, document processing, TTS/STT, web chat
+frontends. The table's "Host headroom" row is a budget, not a leftover:
+at the shipped pins the head box keeps ~5–7 GiB (speed) / ~2.5 GiB
+(capacity) with workers at 11–12 GiB, and the measured head-box floor
+through a 500K-token cold prefill is ≥3.1 GiB (landmine 17). Spend it
+deliberately: pushing `GPU_MEM_UTIL` past the shipped pins trades the
+budget away fast (the speed profile loses ~14% of its 16-way aggregate
+at 0.80 — FIXLOG), and every gmu ceiling in the FIXLOG was measured, not
+guessed. If a box must carry heavier co-tenants, step `GPU_MEM_UTIL`
+down before touching the pool pins — the FIXLOG ladders record what
+each step buys.
+
 ### Not tested / not claimed
 
 Multi-*hour* soaks; the spec-decode + CUDA-graph corruption windows the
@@ -110,7 +129,7 @@ nvfp4 KV (deliberate — see "Full quality").
 
 ## The CSF build (fastest measured; one upstream release away)
 
-The third ladder (FIXLOG rungs 24–28) ports the CSF compressed-scales
+The third ladder (FIXLOG rungs 24–29) ports the CSF compressed-scales
 serving path to TP=3 and races it against the fp8 speed profile at
 identical settings (single-variable base swap):
 
@@ -138,10 +157,14 @@ has a one-line readiness check, and the wait-race fix it documents is
 required for the 2112 geometry). You can also **extract a working
 CSF-capable b12x from the author's public beta channel today** — a
 digest-pinned, copy-paste procedure in `patches-csf/README.md` ("Getting
-a CSF-capable b12x today"). Master alone is still **not
-sufficient**: the m1 decode-plan declaration gap must also close (or the
-b12x fixes `patches-csf/README.md` documents must be applied) — verify
-any candidate runtime with a small boot, not just the symbol check. The k-depth answer
+a CSF-capable b12x today"). Master alone is still **not sufficient** —
+and this is now measured, not cautious: master plus the documented
+wait-race fix boots cleanly at pool parity, but its draft/verify path
+delivers roughly **half** the beta build's spec acceptance — code-class
+decode lands at ~half the beta band, prose at ~three-quarters (FIXLOG
+rung 29). A release must also match the beta lineage's draft/verify
+kernels; until one does, verify any candidate runtime with a small
+boot, not just the symbol check. The k-depth answer
 carries over from the fp8 profile: k=5 stays optimal — k=4 measured
 faster prose but −10–11% on code-class streams (deep acceptance;
 measured on both bases), closing
@@ -471,8 +494,10 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
 
 - **CSF runtime release** is the one external dependency left: the
   converter and loader patches here are complete; the day a public b12x
-  ships CSF symbols **and closes its two declaration/wait-race gaps**
-  (`patches-csf/README.md`), the CSF speed build (fastest measured — see
+  ships CSF symbols **and closes its declaration/wait-race gaps with
+  beta-lineage draft/verify throughput** (`patches-csf/README.md`;
+  master + the documented fix boots clean but roughly halves spec
+  acceptance — rung 29), the CSF speed build (fastest measured — see
   its section) serves with no further porting. The symbol check alone is
   not readiness — verify with a small boot.
 - **Prefill** stays the open frontier, now with the packaging half
@@ -534,7 +559,7 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
   1M-context recipe line, and the 4-box SGLang reference numbers.
 
 Ours: the 0731/V4.0 TP=3 port itself — the three ladders in
-`docs/FIXLOG.md` (28 rungs), the `patches-karmic/` set (V4→V4.1 pad delegation,
+`docs/FIXLOG.md` (29 rungs), the `patches-karmic/` set (V4→V4.1 pad delegation,
 64-aligned MoE pad, the `DSparkDraftModel` gate, `allow_tp_padding`
 marking), the wrong-default-model trap, the MHC dynamo wall + tilelang
 patch, the o_proj→b12x routing, the pre-warm/prefix-cache workflow
