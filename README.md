@@ -37,9 +37,10 @@ same container names and port — you pick per deployment:
   ~3.6–4.0M pool at 8192 (~5.6–5.8M at 4096, per landmine 14's
   no-spec rule). Ships as a complete offline toolchain + loader patches
   (`patches-csf/`, `tools/csf/`) with **one prerequisite outside this
-  repo**: a b12x runtime with the CSF kernel path — landed on the b12x
-  master branch 2026-10-06 but still two declaration/wait-race gaps
-  short of serving; see the CSF section below.
+  repo**: a b12x runtime with the CSF kernel path — that path landed on
+  the b12x master branch 2026-10-06, and with the two documented b12x
+  fixes applied it boots and serves, but at roughly half the beta
+  build's spec throughput (rung 29); see the CSF section below.
 
 As far as we can find: the capacity profile is the first TP=3 serving of
 this checkpoint at full native weight, and the speed profile the first
@@ -81,7 +82,7 @@ section).
 | Single-stream decode | **~100–108 tok/s** count/code-class · ~45–50 free prose (acceptance-bound: 74%→11% across k=5 draft positions on prose) | **~29–30 tok/s** (zero spec decode; re-verified live at 4096) |
 | Aggregate decode | ~88–98 @ 4 · ~140–155 @ 8 · ~176 @ 12 · ~186 @ 20 · **~199–208 @ 24-way** (best-day pair; ~199–201 at the shipped gmu 0.79 — the `max_num_seqs` cap) | **~150 tok/s @ 16-way** (3-repeat stable, same harness class as the speed numbers; older 4/8-way figures were harness-ambiguous and retired) |
 | Prefill | ~1.0–1.06K tok/s @ 38–43K prompt | **~1.5–1.6K tok/s** @ ~38K prompt (the 4096 lever; was ~0.9K at 8192) |
-| KV pool (fp8 KV, native 1M ctx, 24 seqs) | ~2.3–2.6M ≈ **2.2–2.5 full-1M sessions** at gmu 0.79 (±6–8% boot-to-boot jitter; capture-48 variant: ~2.7–2.8M ≈ 2.6–2.7 — see landmine 16) | **~7.5–7.6M at gmu 0.80** (two-boot verified within 1%; ±10% boot-to-boot jitter class) ≈ **~7.2 sessions** (~29–30 @ 256K) |
+| KV pool (fp8 KV, native 1M ctx, 24 seqs) | ~2.3–2.6M ≈ **2.2–2.5 full-1M sessions** at gmu 0.79 (±6–8% boot-to-boot jitter; capture-48 variant: ~2.7–2.8M ≈ 2.6–2.7 — see landmine 15) | **~7.5–7.6M at gmu 0.80** (two-boot verified within 1%; ±10% boot-to-boot jitter class) ≈ **~7.2 sessions** (~29–30 @ 256K) |
 | Cold boot to serving | ~12–15 min (spec autotune + kernel priming) | ~7–10 min (Ray bring-up) |
 | Long-context retrieval | needle-in-haystack correct at ~21–22K and ~48K tokens | needle correct at 21K and ~59K |
 | Output integrity | strict-JSON valid; temp-0 exact repeats clean; 10-min soak, 120 requests, **0 corrupted** | strict-JSON byte-valid; 0 CJK/corruption incl. FULL graphs; 15-min mixed soak, ~340 rounds, **0 errors** |
@@ -153,14 +154,15 @@ documented).
 output; serving needs a b12x build with the CSF kernel path — that path
 landed on the b12x master branch on 2026-10-06, so the next release or
 Spark nightly that bakes it completes the chain (`patches-csf/README.md`
-has a one-line readiness check, and the wait-race fix it documents is
-required for the 2112 geometry). You can also **extract a working
+has a one-line readiness check, and the wait-race and `_instantiate`
+retry fixes it documents are both required for the 2112 geometry). You can also **extract a working
 CSF-capable b12x from the author's public beta channel today** — a
 digest-pinned, copy-paste procedure in `patches-csf/README.md` ("Getting
 a CSF-capable b12x today"). Master alone is still **not sufficient** —
-and this is now measured, not cautious: master plus the documented
-wait-race fix boots cleanly at pool parity, but its draft/verify path
-delivers roughly **half** the beta build's spec acceptance — code-class
+and this is now measured, not cautious: master plus the two documented
+b12x fixes (compile wait-race + `_instantiate` retry) boots cleanly at
+pool parity, but its draft/verify path
+delivers roughly **half** the beta build's spec throughput — code-class
 decode lands at ~half the beta band, prose at ~three-quarters (FIXLOG
 rung 29). A release must also match the beta lineage's draft/verify
 kernels; until one does, verify any candidate runtime with a small
@@ -348,11 +350,11 @@ both if you stage it).
 1. Stage the checkpoint on **all three** boxes (identical path), e.g.:
 
 ```sh
-hf download Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2xDGX \
-  --revision 2a7dd6a12d46 --local-dir /home/YOURUSER/models/superdeepseek-v4-flash-abliterated-mq-2xdgx
+hf download Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2XDGX \
+  --revision 2a7dd6a12d46 --local-dir /home/YOURUSER/models/superdeepseek-v4-flash-abliterated-mq-2xdgx-2a7dd6a12d46
 # then create the preflight marker the helpers gate on:
-echo '{"source":"huggingface","repo":"Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2xDGX"}' \
-  > /home/YOURUSER/models/superdeepseek-v4-flash-abliterated-mq-2xdgx/_DOWNLOAD_COMPLETE.json
+echo '{"source":"huggingface","repo":"Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2XDGX"}' \
+  > /home/YOURUSER/models/superdeepseek-v4-flash-abliterated-mq-2xdgx-2a7dd6a12d46/_DOWNLOAD_COMPLETE.json
 ```
 
    Staging the **official** DeepSeek repo instead? It ships 46 shards,
@@ -383,7 +385,8 @@ ENV_SRC=config/cluster.env.capacity ./launch/ds4flash-tp3-up {preflight|pull-ima
 Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
 **[C]** capacity, **[B]** both.
 
-1. **[B] Pass `--model` explicitly** (the helpers do). The capacity
+1. **[B] Pass `--model` explicitly** (the capacity helper does; the
+   speed image's `vllm serve` takes the path positionally). The capacity
    image's api_server ignores a bare positional model path and silently
    boots `Qwen/Qwen3-0.6B` — which then fails TP divisibility (16 % 3)
    and sends you debugging a phantom model for hours.
@@ -489,6 +492,7 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
   recording discipline) — reuse it for your own A/B ladders
 - `LICENSE` — MIT for our scripts; `patches*/` upstream files stay
   Apache-2.0
+- `.gitignore` — keeps logs and Python caches out of the tree
 
 ## What's next (roadmap, not needed for correctness)
 
@@ -496,8 +500,8 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
   converter and loader patches here are complete; the day a public b12x
   ships CSF symbols **and closes its declaration/wait-race gaps with
   beta-lineage draft/verify throughput** (`patches-csf/README.md`;
-  master + the documented fix boots clean but roughly halves spec
-  acceptance — rung 29), the CSF speed build (fastest measured — see
+  master + the two documented fixes boots clean but roughly halves spec
+  throughput — rung 29), the CSF speed build (fastest measured — see
   its section) serves with no further porting. The symbol check alone is
   not readiness — verify with a small boot.
 - **Prefill** stays the open frontier, now with the packaging half
