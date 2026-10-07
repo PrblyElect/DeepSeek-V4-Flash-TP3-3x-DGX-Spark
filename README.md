@@ -135,7 +135,10 @@ output; serving needs a b12x build with the CSF kernel path — that path
 landed on the b12x master branch on 2026-10-06, so the next release or
 Spark nightly that bakes it completes the chain (`patches-csf/README.md`
 has a one-line readiness check, and the wait-race fix it documents is
-required for the 2112 geometry). Master alone is still **not
+required for the 2112 geometry). You can also **extract a working
+CSF-capable b12x from the author's public beta channel today** — a
+digest-pinned, copy-paste procedure in `patches-csf/README.md` ("Getting
+a CSF-capable b12x today"). Master alone is still **not
 sufficient**: the m1 decode-plan declaration gap must also close (or the
 b12x fixes `patches-csf/README.md` documents must be applied) — verify
 any candidate runtime with a small boot, not just the symbol check. The k-depth answer
