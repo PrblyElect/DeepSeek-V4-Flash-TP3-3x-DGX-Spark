@@ -42,6 +42,14 @@ stdlib-only so it runs anywhere:
 - **One sacrificial long-prefill request after the server reports
   healthy** — the first long prefill pays ~2× TTFT in JIT compilation.
   It must never land inside a measurement.
+- **Idle-gate solo measurements.** Before any solo/tier/speed reading,
+  GET `/metrics` and require `vllm:num_requests_running` == 0 and
+  `vllm:num_requests_waiting` == 0, immediately before measuring. A
+  "slow" reading taken with traffic in flight — your own warmup
+  replays, scheduled jobs, co-tenant requests, other clients — is an
+  unlabeled mixed number, not a property of the boot: don't act on it,
+  re-measure idle. Post-boot warmup traffic overlaps exactly the window
+  a fresh boot first gets probed; let it settle or verify idleness.
 - **Quote the engine's own pool** (`GPU KV cache size` from the boot
   log), never an estimate.
 
