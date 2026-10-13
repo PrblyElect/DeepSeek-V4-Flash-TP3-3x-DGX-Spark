@@ -2,7 +2,7 @@
 # Workstation-side orchestration controller for the ds4flash TP=3 ring
 # across three DGX Sparks. Companions: launch/ds4flash-tp3-spark (capacity
 # profile, node-local) and launch/ds4flash-tp3-karmic-spark (speed profile,
-# node-local). Validated end-to-end 2026-10-03/04.
+# node-local). Validated end-to-end through the first-light window.
 #
 # The profile is selected by which env file you point the controller at:
 #   ./launch/ds4flash-tp3-up ...                                  # SPEED (default)
@@ -45,6 +45,7 @@ stack() { env_val STACK; }
 # and the health-watch bound (speed boots take ~14 min: spec autotune +
 # kernel priming + warmup — do not call it hung before ~15 min).
 stack_bits() {
+  [[ -f "$ENV_SRC" ]] || { echo "env file not found: $ENV_SRC (set ENV_SRC=…; default config/cluster.env)" >&2; exit 2; }
   case "$(stack)" in
     karmic)
       HELPER_SRC="$RECIPE_ROOT/launch/ds4flash-tp3-karmic-spark"
@@ -104,19 +105,24 @@ local_artifacts_ok() {
 cmd_preflight() {
   local_artifacts_ok
   echo "-- profile: STACK=$(stack) · image $(image)"
-  local rc=0 box model_dir shards complete img links
+  local rc=0 box model_dir shards complete img links want
   model_dir="$(env_val MODEL_DIR)"
+  want="$(env_val EXPECTED_SHARDS)"
   for box in "$BOX_HEAD:ds4flash-tp3-head" "$BOX_W1:ds4flash-tp3-worker1" "$BOX_W2:ds4flash-tp3-worker2"; do
     local host="${box%%:*}" name="${box##*:}"
     echo "== $host ($name) =="
     complete=$(b "$host" "test -f '$model_dir/_DOWNLOAD_COMPLETE.json' && echo yes || echo NO") || complete=NO
     echo "  checkpoint staged: $complete"
-    shards=$(b "$host" "find '$model_dir' -maxdepth 1 -name 'model-?????-of-00048.safetensors' 2>/dev/null | wc -l") || shards=0
-    echo "  shards present:   $shards/$(env_val EXPECTED_SHARDS)"
+    [[ "$complete" == "yes" ]] || rc=1
+    shards=$(b "$host" "find '$model_dir' -maxdepth 1 -name 'model-?????-of-*.safetensors' 2>/dev/null | wc -l | tr -d ' '") || shards=0
+    echo "  shards present:   $shards/$want"
+    [[ "$shards" == "$want" ]] || rc=1
     img=$(b "$host" "docker image inspect '$(image)' --format '{{.Id}}' 2>/dev/null || echo MISSING")
     echo "  image:            $img"
-    links=$(b "$host" "ip -br link | grep -cE 'enp1s0f[01]np[01].*UP'")
+    [[ "$img" != "MISSING" ]] || rc=1
+    links=$(b "$host" "ip -br link | grep -cE 'enp1s0f[01]np[01].*UP'") || links=0
     echo "  CX-7 links UP:    $links"
+    [[ "$links" != "0" ]] || rc=1
     b "$host" "test -e /dev/infiniband" && echo "  /dev/infiniband:  ok" || { echo "  /dev/infiniband:  MISSING"; rc=1; }
   done
   echo "-- overlap check: any other resident model lane must be parked before start --"
@@ -188,7 +194,7 @@ print(json.dumps({
     **extra,
 }))
 PY
-  b "$BOX_HEAD" "curl -s --max-time 300 http://127.0.0.1:$port/v1/chat/completions -H 'Content-Type: application/json' -d @/tmp/ds4flash-tp3-prewarm-tiny.json >/dev/null; curl -s --max-time 300 http://127.0.0.1:$port/v1/chat/completions -H 'Content-Type: application/json' -d @/tmp/ds4flash-tp3-prewarm-long.json >/dev/null" || true
+  b "$BOX_HEAD" "curl -s --max-time 300 http://127.0.0.1:$port/v1/chat/completions -H 'Content-Type: application/json' -d @/tmp/ds4flash-tp3-prewarm-tiny.json >/dev/null; curl -s --max-time 300 http://127.0.0.1:$port/v1/chat/completions -H 'Content-Type: application/json' -d @/tmp/ds4flash-tp3-prewarm-long.json >/dev/null; rm -f /tmp/ds4flash-tp3-prewarm-tiny.json /tmp/ds4flash-tp3-prewarm-long.json" || true
   echo "pre-warm done — steady-state from the next request on"
 }
 
@@ -200,9 +206,10 @@ cmd_start() {
     overlap_refusal "$host" || exit 1
   done
   echo "starting workers..."
-  b "$BOX_W1" "$LIBEXEC_DIR/$HELPER_NAME start" &
-  b "$BOX_W2" "$LIBEXEC_DIR/$HELPER_NAME start" &
-  wait
+  b "$BOX_W1" "$LIBEXEC_DIR/$HELPER_NAME start" & local p1=$!
+  b "$BOX_W2" "$LIBEXEC_DIR/$HELPER_NAME start" & local p2=$!
+  wait "$p1" || { echo "worker1 start failed (check its console output above)" >&2; exit 1; }
+  wait "$p2" || { echo "worker2 start failed (check its console output above)" >&2; exit 1; }
   echo "starting head (engine on :$port)..."
   b "$BOX_HEAD" "$LIBEXEC_DIR/$HELPER_NAME start"
   echo "-- bounded health watch: up to $((HEALTH_TIMEOUT / 60)) min (weights + compile + spec autotune on the speed profile) --"
