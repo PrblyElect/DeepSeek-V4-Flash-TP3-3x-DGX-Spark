@@ -2,7 +2,7 @@
 # Node-local lifecycle helper for the ds4flash TP=3 ring (DeepSeek-V4-Flash,
 # full weights) on a 3x DGX Spark CX-7 triangle.
 #
-# Validated profile (2026-10-03/04): 9/9 clean cold boots through the
+# Validated profile: 9/9 clean cold boots through the
 # eager -> PIECEWISE -> FULL cudagraph ladder. Runs on every box; rank is
 # derived by matching `hostname -s` against HEAD_HOST/W1_HOST/W2_HOST from
 # the staged env file.
@@ -45,7 +45,7 @@ preflight() {
     echo "checkpoint not fully staged: $MODEL_DIR/_DOWNLOAD_COMPLETE.json missing" >&2; return 1; }
   local shards
   shards=$(find "$MODEL_DIR" -maxdepth 1 -type f \
-    -name 'model-[0-9][0-9][0-9][0-9][0-9]-of-00048.safetensors' | wc -l)
+    -name 'model-[0-9][0-9][0-9][0-9][0-9]-of-*.safetensors' | wc -l | tr -d ' ')
   [[ "$shards" -eq "$EXPECTED_SHARDS" ]] || {
     echo "shard count $shards != EXPECTED_SHARDS $EXPECTED_SHARDS" >&2; return 1; }
   test -f "$MODEL_DIR/config.json"
