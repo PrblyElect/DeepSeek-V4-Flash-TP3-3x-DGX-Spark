@@ -133,6 +133,7 @@ down before touching the pool pins — the FIXLOG ladders record what
 each step buys.
 
 ### Not tested / not claimed
+
 Multi-*hour* soaks; the spec-decode + CUDA-graph corruption windows the
 community documented under sustained load ([eugr
 #363](https://github.com/eugr/spark-vllm-docker/issues/363) garble
