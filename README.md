@@ -1,6 +1,6 @@
 ---
 license: mit
-base_model: Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2XDGX
+base_model: Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2xDGX
 library_name: vllm
 tags:
 - serving-recipe
@@ -13,21 +13,20 @@ tags:
 
 **TL;DR** — Serve DeepSeek-V4-Flash (284B total / 13B active, native
 mixed FP4+FP8) tensor-parallel across three DGX Sparks on a 200G CX-7
-RoCE triangle. Two validated profiles from one repo: interactive
+RoCE triangle. Two validated launch profiles from one repo — interactive
 decode at ~100+ tok/s on code-class streams (speed, DSpark k=5), or a
 ~7.5M-token KV pool ≈ 7 simultaneous full-1M-context sessions
-(capacity). Digest-pinned images, three crash-ladder FIXLOGs,
-acceptance gates, and a measured landmine ledger are included.
+(capacity) — plus a measured CSF build (fastest single-stream; one
+upstream release away). Digest-pinned images, three crash-ladder
+FIXLOGs, acceptance gates, and a measured landmine ledger are included.
 Bring-up is four commands — see **Quick start** below. Both profiles
 are sized to share the boxes: host headroom for co-tenant services is
 part of the spec (**Headroom by design**).
 
-**Two validated serving profiles for DeepSeek-V4-Flash (the 0731-lineage
-checkpoint — 284B total / 13B active, full native weight in its mixed
-FP4+FP8 packaging; here the abliterated "SuperDeepseek MQ" build)
-tensor-parallel across three DGX Sparks (GB10) on one CX-7 RoCE
-triangle (200G per leg).** Both profiles serve the same checkpoint from the
-same container names and port — you pick per deployment:
+**Two validated serving profiles for the abliterated "SuperDeepseek MQ"
+build of the 0731-lineage checkpoint, tensor-parallel across three DGX
+Sparks (GB10) on one CX-7 RoCE triangle (200G per leg). Both profiles
+serve from the same container names and port — you pick per deployment:**
 
 - **SPEED** (default) — karmic-kraken-lineage image with DSpark
   speculative decoding: single-stream decode is draft-acceptance-bound
@@ -59,6 +58,12 @@ DSpark-at-TP=3 serving of the 0731-lineage V4 checkpoint (the published
 TP=3 DSpark lanes run V4.1 — credited below). The machinery both profiles
 build on is credited below and in `docs/FIXLOG.md`.
 
+Prerequisites: three DGX Sparks wired as a full CX-7 RoCE triangle (one
+/24 per leg, MTU 9000) plus a management LAN, the checkpoint (~170 GB)
+and the digest-pinned image staged on every box, and Docker with GPU
+support. The full pinned stack and hardware detail live in the
+**Hardware** and **Stack** sections below.
+
 ## Quick start
 
 From your workstation, after staging the checkpoint on all three boxes
@@ -76,7 +81,7 @@ ENV_SRC=config/cluster.env.capacity ./launch/ds4flash-tp3-up {preflight|pull-ima
 Then verify the acceptance gates (Bring-up step 3) and read the
 landmines before your second boot. Full detail below.
 
-Validated 2026-10-03/04 (first-light window; its soak/boot counts
+Validated over a two-day first-light window (its soak/boot counts
 predate the detailed FIXLOG record): the capacity profile through 9/9 clean cold
 boots of the eager → PIECEWISE → FULL cudagraph ladder; the speed profile
 through the ten-rung bring-up ladder (FIXLOG rungs 14–23), the acceptance
@@ -211,7 +216,7 @@ the spec-depth axis at {4, 5, 10}.
   of forcing a smaller quant.
 - **Why not V4.1-Flash?** It is the stronger card on paper (GPQA-D 90.9
   vs 88.1, Terminal-Bench 2.1 90.6) but weighs ~510 GB natively — it
-  does not fit 3× 121 GiB without aggressive community re-quants whose
+  does not fit 3× ~122 GiB without aggressive community re-quants whose
   quality is undocumented. Native 0731 now; V4.1 when a credible
   sub-300 GiB packaging exists.
 - **fp8 KV, not nvfp4 — now measured, not just cautious.** We A/B'd
@@ -329,7 +334,7 @@ prefill matches the best patched lanes, and neither does ours.
 
 ## Hardware / network this was proven on
 
-- 3× DGX Spark (GB10, sm_121, 121 GiB usable unified memory each)
+- 3× DGX Spark (GB10, sm_121, ~122 GiB usable unified memory each)
 - Full CX-7 triangle: three QSFP cables, one /24 per leg
   (e.g. 10.77.0.x / 10.77.1.x / 10.77.2.x — whatever your mesh uses), RoCEv2 GID
   index 3, MTU 9000
@@ -352,36 +357,28 @@ prefill matches the best patched lanes, and neither does ours.
 
 Checkpoint (both): any `deepseek_v4` checkpoint in the native mixed
 FP4+FP8 packaging; validated with `Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2xDGX`
-@ `2a7dd6a12d46` (48-shard repack — the helpers' shard glob and
-`EXPECTED_SHARDS` assume it; the official HF repo is 46 shards, adjust
-both if you stage it).
+@ `2a7dd6a12d46` (48-shard repack — `EXPECTED_SHARDS` assumes it; the
+official HF repo is 46 shards — set `EXPECTED_SHARDS=46` if you stage
+it).
 
 ## Bring-up
 
 1. Stage the checkpoint on **all three** boxes (identical path), e.g.:
 
 ```sh
-hf download Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2XDGX \
+hf download Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2xDGX \
   --revision 2a7dd6a12d46 --local-dir /home/YOURUSER/models/superdeepseek-v4-flash-abliterated-mq-2xdgx-2a7dd6a12d46
 # then create the preflight marker the helpers gate on:
-echo '{"source":"huggingface","repo":"Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2XDGX"}' \
+echo '{"source":"huggingface","repo":"Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2xDGX"}' \
   > /home/YOURUSER/models/superdeepseek-v4-flash-abliterated-mq-2xdgx-2a7dd6a12d46/_DOWNLOAD_COMPLETE.json
 ```
 
    Staging the **official** DeepSeek repo instead? It ships 46 shards,
-   not 48 — adjust the helpers' shard glob and `EXPECTED_SHARDS`, or
-   repack to 48 to match the validated layout.
+   not 48 — set `EXPECTED_SHARDS=46`, or repack to 48 to match the
+   validated layout.
 2. Edit the profile env: `config/cluster.env` (speed, default) or
-   `config/cluster.env.capacity`; then from your workstation:
-
-```sh
-./launch/ds4flash-tp3-up preflight
-./launch/ds4flash-tp3-up pull-images
-./launch/ds4flash-tp3-up stage-env     # ships env + helper + patches for the selected profile
-./launch/ds4flash-tp3-up start --yes   # workers first, then head; serves :8889 (~14 min on speed)
-# capacity instead:
-ENV_SRC=config/cluster.env.capacity ./launch/ds4flash-tp3-up {preflight|pull-images|stage-env|start --yes}
-```
+   `config/cluster.env.capacity`, then run the **Quick start** sequence
+   above (`preflight` → `pull-images` → `stage-env` → `start --yes`).
 
 3. Acceptance gates. Speed: the two boot-log pad lines
    ("Padded DeepSeek V4.1 attention for TP3: heads 64 -> 72 …" and
@@ -509,12 +506,11 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
 
 - **CSF runtime release** is the one external dependency left: the
   converter and loader patches here are complete; the day a public b12x
-  ships CSF symbols **and closes its declaration/wait-race gaps with
-  beta-lineage draft/verify throughput** (`patches-csf/README.md`;
-  master + the two documented fixes boots clean but roughly halves spec
-  throughput — rung 29), the CSF speed build (fastest measured — see
-  its section) serves with no further porting. The symbol check alone is
-  not readiness — verify with a small boot.
+  ships CSF symbols **with beta-lineage draft/verify throughput**, the
+  CSF speed build (fastest measured — see its section) serves with no
+  further porting. Readiness criteria and today's master-vs-beta gap:
+  `patches-csf/README.md` and FIXLOG rung 29 — the symbol check alone is
+  not readiness; verify any candidate runtime with a small boot.
 - **Prefill** stays the open frontier, now with the packaging half
   answered: a CSF-packed copy of this checkpoint measures top-of-band
   (not the 1.5–2.6K the W4A16-prefill lanes publish — their advantage is
@@ -550,7 +546,7 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
 ## Credits & prior art
 
 - **Jiunsong (Jun Song)** — [SuperDeepSeek, the abliterated V4-Flash
-  build this recipe serves](https://huggingface.co/Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2XDGX)
+  build this recipe serves](https://huggingface.co/Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2xDGX)
   (MIT; the checkpoint is the foundation everything here stands on).
 - **lukealonso / local-inference-lab** — B12X virtual-TP padding (the
   mechanism), the vLLM forks, b12x kernels.
@@ -572,6 +568,9 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
   battery-before-trust stance on spec decode.
 - **MiaAI-Lab** — DS4-on-Spark bug documentation, the original 2-Spark
   1M-context recipe line, and the 4-box SGLang reference numbers.
+- A companion Vision-Exp TP=3 recipe (same authors) — native vision at
+  TP=3, the SP-prefill port, and the scheduler fairness patches (decode
+  deferral cadence + interactive admission) live there.
 
 Ours: the 0731/V4.0 TP=3 port itself — the three ladders in
 `docs/FIXLOG.md` (29 rungs), the `patches-karmic/` set (V4→V4.1 pad delegation,
