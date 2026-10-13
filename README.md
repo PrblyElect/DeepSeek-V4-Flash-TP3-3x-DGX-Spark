@@ -23,10 +23,11 @@ Bring-up is four commands — see **Quick start** below. Both profiles
 are sized to share the boxes: host headroom for co-tenant services is
 part of the spec (**Headroom by design**).
 
-**Two validated serving profiles for the abliterated "SuperDeepseek MQ"
-build of the 0731-lineage checkpoint, tensor-parallel across three DGX
-Sparks (GB10) on one CX-7 RoCE triangle (200G per leg). Both profiles
-serve from the same container names and port — you pick per deployment:**
+**Two validated launch profiles — plus a measured CSF build — for the
+abliterated "SuperDeepseek MQ" build of the 0731-lineage checkpoint,
+tensor-parallel across three DGX Sparks (GB10) on one CX-7 RoCE
+triangle (200G per leg). The two profiles serve from the same container
+names and port; you pick per deployment:**
 
 - **SPEED** (default) — karmic-kraken-lineage image with DSpark
   speculative decoding: single-stream decode is draft-acceptance-bound
@@ -132,7 +133,6 @@ down before touching the pool pins — the FIXLOG ladders record what
 each step buys.
 
 ### Not tested / not claimed
-
 Multi-*hour* soaks; the spec-decode + CUDA-graph corruption windows the
 community documented under sustained load ([eugr
 #363](https://github.com/eugr/spark-vllm-docker/issues/363) garble
