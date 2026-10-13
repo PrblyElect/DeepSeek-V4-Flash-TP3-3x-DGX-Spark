@@ -24,7 +24,10 @@ set -euo pipefail
 
 RECIPE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_SRC="${ENV_SRC:-$RECIPE_ROOT/config/cluster.env}"
-LOG_DIR="$RECIPE_ROOT/logs"
+# Failure rank-log captures go OUTSIDE this repo's tree by default (a
+# logs/ dir next to a public-bound copy is the stray-files incident
+# class); override with DS4FLASH_LOG_DIR if you want them elsewhere.
+LOG_DIR="${DS4FLASH_LOG_DIR:-$HOME/.local/state/ds4flash-tp3-logs}"
 
 # EDIT: ssh targets for your three boxes (head first), or export BOX_*.
 BOX_HEAD="${BOX_HEAD:-user@spark-head.local}"
