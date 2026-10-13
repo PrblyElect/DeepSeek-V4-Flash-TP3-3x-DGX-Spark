@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Node-local lifecycle helper for the ds4flash TP=3 ring — SPEED profile
 # (karmic-kraken image + DSpark speculative decoding). Validated
-# 2026-10-03/04 alongside config/cluster.env; the bring-up ladder behind
-# every design choice is in docs/FIXLOG.md.
+# alongside config/cluster.env during the first-light window; the bring-up
+# ladder behind every design choice is in docs/FIXLOG.md.
 #
 # vs the capacity-profile helper (launch/ds4flash-tp3-spark): mp executor
 # (--nnodes 3, no Ray, no pip installs at container start), b12x 1.5.0 +
@@ -43,12 +43,13 @@ preflight() {
     echo "checkpoint marker missing: $MODEL_DIR/_DOWNLOAD_COMPLETE.json" >&2; return 1; }
   local shards
   shards=$(find "$MODEL_DIR" -maxdepth 1 -type f \
-    -name 'model-[0-9][0-9][0-9][0-9][0-9]-of-00048.safetensors' | wc -l)
+    -name 'model-[0-9][0-9][0-9][0-9][0-9]-of-*.safetensors' | wc -l | tr -d ' ')
   [[ "$shards" -eq "$EXPECTED_SHARDS" ]] || {
     echo "shard count $shards != $EXPECTED_SHARDS" >&2; return 1; }
   docker image inspect "$image" >/dev/null 2>&1 || {
     echo "image missing: $image" >&2; return 1; }
   test -e /dev/infiniband || { echo "/dev/infiniband absent" >&2; return 1; }
+  ip -br link | grep -Eq 'enp1s0f[01]np[01].*UP' || { echo "CX-7 link down" >&2; return 1; }
   local busy
   busy=$(docker ps --format '{{.Names}}' | grep -Ei "$resident_pattern" | grep -v "$container" || true)
   [[ -z "$busy" ]] || { echo "refusing: resident model container(s): $busy" >&2; return 1; }
@@ -82,7 +83,7 @@ serve_args=(
   --prefix-cache-retention-interval 4096
   --no-scheduler-reserve-full-isl
   --async-scheduling
-  --max-cudagraph-capture-size 144
+  --max-cudagraph-capture-size "${MAX_CUDAGRAPH_CAPTURE_SIZE:-144}"
   --compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE","custom_ops":["all"]}'
   --enable-flashinfer-autotune
 )
