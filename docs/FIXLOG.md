@@ -1,6 +1,7 @@
 # FIXLOG — the crash ladder from nothing to first light
 
-Window of 2026-10-03/04 (extended through 10-06 by the CSF campaign). Three
+An initial two-day bring-up window (extended three more days by the CSF
+campaign). Three
 ladders, twenty-nine rungs of distinct root causes, each diagnosed from
 container logs and fixed forward. Recorded verbatim so nobody repeats this
 grind. This is what "nobody has ever run this model at
@@ -8,11 +9,16 @@ TP=3" looks like from the inside — three times: once on the chthonic
 lineage (capacity profile, rungs 1–13), once on the karmic lineage (speed
 profile, rungs 14–23), and once on the CSF port (rungs 24–29).
 
-Re-verified 2026-10-04 on the live lane: ~28 tok/s
+Re-verified on the live lane during the same window: ~28 tok/s
 single-stream, a KV pool at the low edge of the ~4.9–5.4M band (8192-era
 band, pre-4096; boot
 jitter; the re-verify landed there), NCCL 2.30.7 banner — every README
-number re-checked against the running ring.
+number re-checked against the running ring. The later 4096 re-pin of the
+capacity profile was re-verified live the same way: decode held the top
+of its ~29–30 band (vs the 27–28 8192-era band), pool ~7.6M, prefill ~1.6K
+at ~38K prompts.
+
+## The first ladder: chthonic (the capacity profile, rungs 1–13)
 
 | # | Symptom | Root cause | Fix |
 |---|---|---|---|
@@ -168,13 +174,12 @@ shards (~1:50 for 50 shards/rank) → profile run in eager → KV pool →
 - First request after boot is slow (warmup); judge steady-state from the
   second request on.
 
-## Post-first-light tuning notes
+## Capacity-profile tuning notes
 
 - The `NCCL_P2P_DISABLE=1` / `NCCL_SHM_DISABLE=1` pins inherited from
   older Spark recipes were **halving prefill throughput** (~50 s → ~25 s on
   a 21K prompt) with decode unchanged — dropping them doubled it. Those
-  pins treat symptoms this stack doesn't have. Not in the table above
-  because it cost a debugging hour to learn and exactly one line to fix.
+  pins treat symptoms this stack doesn't have.
 - Channels 8→4 + `NCCL_ALGO=Ring` + `NCCL_NET_GDR_LEVEL=0`: A/B'd live —
   prefill and decode unchanged within noise on this lane. Kept (community-
   best pins on GB10 RoCE), but don't expect them to be a speed lever here;
@@ -184,7 +189,7 @@ shards (~1:50 for 50 shards/rank) → profile run in eager → KV pool →
   use. The launcher pre-warms with one tiny AND one ~15K-token request so
   no real user eats it. Related: a replayed ~15K prefix answers in 0.9 s
   (~17×) thanks to prefix caching — keep client system prompts stable.
-- `MAX_NUM_BATCHED_TOKENS=16384` is a trap on 121 GiB boxes: the activation
+- `MAX_NUM_BATCHED_TOKENS=16384` is a trap on ~122 GiB boxes: the activation
   workspace eats ~1.9M tokens of KV pool for zero measured prefill gain.
   8192 was the original sweet spot at this gmu; the no-spec profiles now
   ship 4096 (see the two-truths tuning note above — same workspace
