@@ -1,0 +1,36 @@
+--- a/preparation/session.py
++++ b/preparation/session.py
+@@ -1232,6 +1232,33 @@
+             self.session._pool.pending
+ 
+     def _instantiate(self, request, selection, factory, expected, *, synchronize=True, compile_directly=False, reject_unlaunchable=False):
++        # --- TP3-recipe patch (2nd): retry-once-with-compile on the
++        # "unplanned CuTe program" rejection. The timing races carry their
++        # own no_compilation contexts in _measurement.py, so this guard here
++        # is redundant for fairness — but paths that bypass the obligation
++        # machinery (cross-session plan reuse) reach materialize with
++        # undeclared programs (compact_micro at n%128==64). Compiling on
++        # that miss is exactly what warmup's compile_directly does.
++        try:
++            return self._instantiate_once(
++                request, selection, factory, expected,
++                synchronize=synchronize, compile_directly=compile_directly,
++                reject_unlaunchable=reject_unlaunchable,
++            )
++        except RuntimeError as error:
++            message = str(error)
++            if compile_directly or (
++                "unplanned CuTe program" not in message
++                and "used undeclared programs" not in message
++            ):
++                raise
++            return self._instantiate_once(
++                request, selection, factory, set(expected),
++                synchronize=synchronize, compile_directly=True,
++                reject_unlaunchable=reject_unlaunchable,
++            )
++
++    def _instantiate_once(self, request, selection, factory, expected, *, synchronize=True, compile_directly=False, reject_unlaunchable=False):
+         import torch
+ 
+         from ._measurement import no_compilation
