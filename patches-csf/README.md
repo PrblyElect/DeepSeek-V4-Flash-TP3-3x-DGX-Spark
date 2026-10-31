@@ -2,9 +2,12 @@
 
 These pieces complete the CSF (compressed FP4 scales) serving path for
 DeepSeek-V4-Flash at TP=3, on top of the public CSF loader lineage
-(vLLM PR #973, branch `feat/kk-fp4-csf` — take the unmodified branch
-files from there; only the loader below carries TP=3 edits, marked
-`TP3-recipe patch`).
+(vLLM PR #973 — now **closed and unmerged**; take the unmodified branch
+files from its head branch `feat/mxfp4-csf-ds4-flash-kk` @ `33617d4df1f3`,
+not from the base branch `feat/kk-fp4-csf`, which is missing
+`vllm/models/deepseek_v4/mxfp4_csf.py` and predates the
+`deepseek_v4_flash` branch; only the loader below carries TP=3 edits,
+marked `TP3-recipe patch`).
 
 ## Prerequisite (read this first)
 
@@ -12,7 +15,8 @@ The CSF serving path needs a **b12x runtime with CSF support**. The
 CSF prepare + compact-decode kernel path landed on the b12x **master
 branch on 2026-10-06** (public commits; watch for the release or
 container nightly that bakes it — verify with the symbol check below),
-and the vLLM-side loader files live on the open PR #973 branch. The
+and the vLLM-side loader files live on the (closed, unmerged) PR #973
+head branch named above. The
 converter in `tools/csf/` runs on stock `torch` + `numpy` +
 `safetensors` today. Quick readiness check for any candidate runtime:
 

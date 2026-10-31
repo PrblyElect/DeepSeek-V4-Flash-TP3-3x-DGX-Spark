@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "status": "TEMPLATE — no claim in this file is pinned yet",
+  "why": "A digest-pinned image says which manifest was pulled. It does not say which BYTES ran: the recipe bind-mounts patched engine files over the image's own, and the capacity profile installs a pinned b12x build on top of the baked one. The build stamp and the engine-critical file hashes say that. This manifest ships UNFILLED on purpose: the hashes cannot be computed without an image, and an invented digest is worse than no digest. Fill it in with make-engine-identity.py (one command, against a container that is already up) and the boot gate becomes a real adoption gate: a re-pinned image fails it until it is re-audited.",
+  "how_to_fill": "python3 launch/tp3-kit/make-engine-identity.py --profile speed --container ds4flash-tp3-head --write   (run on the box that owns the container, then re-stage the kit)",
+  "not_pinned_marker": "any value that is not a 64-character lowercase sha256 digest is treated as NOT PINNED: the gate reports it and passes, so a fresh clone boots",
+  "profiles": {
+    "speed": {
+      "note": "the karmic-lineage speed image. Its published vllm version string is 0.1.dev21553+gab86b7073 (see the README stack table); make-engine-identity.py records what your container actually reports.",
+      "dist_root": "/usr/local/lib/python3.12/dist-packages",
+      "build_stamp": {
+        "vllm": "<FILL-IN: the vllm version reported inside the pinned image>"
+      },
+      "files": {
+        "vllm/models/deepseek_v4/attention.py": "<FILL-IN: sha256 — bind-mounted TP3 patch>",
+        "vllm/models/deepseek_v4/nvidia/model.py": "<FILL-IN: sha256 — bind-mounted TP3 patch>",
+        "vllm/model_executor/models/config.py": "<FILL-IN: sha256 — bind-mounted TP3 patch>",
+        "vllm/models/deepseek_v4/sparse_mla.py": "<FILL-IN: sha256 — the DS-V4 sparse-MLA backend (its kernel block size is 256)>",
+        "vllm/models/deepseek_v4/nvidia/b12x.py": "<FILL-IN: sha256 — the B12X attention backend this profile selects>",
+        "vllm/v1/attention/backends/mla/sparse_swa.py": "<FILL-IN: sha256 — the sparse-SWA backend (preferred block size 256)>",
+        "vllm/v1/attention/backends/mla/indexer.py": "<FILL-IN: sha256 — the sparse-attention indexer backend>",
+        "vllm/v1/worker/gpu/model_runner.py": "<FILL-IN: sha256 — the model runner this profile selects (V2)>",
+        "vllm/v1/worker/gpu_model_runner.py": "<FILL-IN: sha256 — the older model runner (V1), the one upstream issue 53051 is filed against>",
+        "vllm/config/vllm.py": "<FILL-IN: sha256 — the engine config (uniform_decode_query_len lives here)>",
+        "vllm/platforms/interface.py": "<FILL-IN: sha256 — the platform policy that derives the KV block size>"
+      }
+    },
+    "capacity": {
+      "note": "the chthonic-lineage capacity image (no speculative decode, Ray executor).",
+      "dist_root": "/opt/venv/lib/python3.12/site-packages",
+      "build_stamp": {
+        "vllm": "<FILL-IN: the vllm version reported inside the pinned image>"
+      },
+      "files": {
+        "vllm/model_executor/kernels/mhc/tilelang.py": "<FILL-IN: sha256 — bind-mounted dynamo-safe probe; based on the engine file as it stood BEFORE the upstream 'Route DeepSeek hc head through TileLang op' commit, so a capacity boot runs the older routing — see NOTICE>",
+        "vllm/models/deepseek_v4/sparse_mla.py": "<FILL-IN: sha256 — the DS-V4 sparse-MLA backend (its kernel block size is 256)>",
+        "vllm/models/deepseek_v4/nvidia/b12x.py": "<FILL-IN: sha256 — the B12X attention backend this profile selects>",
+        "vllm/v1/attention/backends/mla/b12x_mla_sparse.py": "<FILL-IN: sha256 — the B12X_MLA_SPARSE backend>",
+        "vllm/v1/attention/backends/mla/sparse_swa.py": "<FILL-IN: sha256 — the sparse-SWA backend>",
+        "vllm/v1/worker/gpu_model_runner.py": "<FILL-IN: sha256 — the model runner this lineage uses>"
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+# NOTICE
+
+This repository is MIT-licensed (see `LICENSE`) for its own scripts and
+documentation. Some directories carry modified or verbatim copies of
+upstream Apache-2.0 source files, which remain under the Apache License
+2.0 — the licence text is in `LICENSE-APACHE`, and each file carries the
+SPDX identifier in its own header:
+
+- `patches/tilelang.py`
+- the three files in `patches-karmic/`
+- the twelve files in `patches-csf/vllm-overlay/`
+- `patches-csf/mxfp4_csf_loader.py`
+- `patches-csf/b12x-instantiate-retry.patch` (a unified diff against
+  b12x's `preparation/session.py`)
+
+Every modification in those files is marked in-file by a "--- TP3-recipe
+patch" comment block; the CSF loader at `patches-csf/mxfp4_csf_loader.py`
+carries the same markers. Eight of the twelve `patches-csf/vllm-overlay/`
+files are **verbatim** copies of the upstream branch they come from, with
+no local edits and therefore no markers.
+
+**One exception, stated plainly.** `patches/tilelang.py` is based on the
+engine's `vllm/model_executor/kernels/mhc/tilelang.py` as it stood
+*before* the upstream commit "Route DeepSeek hc head through TileLang
+op". The file is bind-mounted over the image's own copy at boot, so a
+capacity boot runs the older routing whether or not the image carries the
+newer one. The TP=3 edits on top of that base are marked; the rollback to
+the older base is not an edit of ours and is not marked as one.
+
+The MIT license in `LICENSE` covers the original scripts and
+documentation in this repository, and does not extend to those upstream
+files.

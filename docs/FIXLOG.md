@@ -181,7 +181,7 @@ shards (~1:50 for 50 shards/rank) → profile run in eager → KV pool →
   a 21K prompt) with decode unchanged — dropping them doubled it. Those
   pins treat symptoms this stack doesn't have.
 - Channels 8→4 + `NCCL_ALGO=Ring` + `NCCL_NET_GDR_LEVEL=0`: A/B'd live —
-  prefill and decode unchanged within noise on this lane. Kept (community-
+  prefill and decode unchanged within noise on this recipe. Kept (community-
   best pins on GB10 RoCE), but don't expect them to be a speed lever here;
   at 8K chunks this engine is compute-bound, not fabric-bound.
 - **The first long-prompt request after boot pays ~2.2× TTFT** (~45 s vs
@@ -218,3 +218,55 @@ alternation on the first token, semantically identical — gate determinism
 checks on normalized text); and requests over `max_model_len` can be
 silently swallowed by this fork's API server (no 400, no timeout — a
 silent client wait on a huge prompt means over-limit, not a hang).
+
+## The publication pass (no boot, no window)
+
+The ladder above is the bring-up record. This section is the review of
+the recipe as a *published document*, and the defects it caught were of
+a different kind — they were not crashes but claims that did not hold.
+
+- **the identity manifest's documented fill procedure could never
+  succeed.** The maker wrote the engine's version under the key
+  `vllm_version`, and the gate reads each key as a *distribution name* —
+  so the gate reported "package not installed" for a package that was
+  installed. The key is now the distribution name, and the stamp is read
+  from the same tree the file hashes come from.
+- **the wheelhouse check could be passed by a file it never saw.** The
+  verifier checked every recorded file and nothing else, while the boot
+  installs with `--find-links` and pip resolves the *highest* version it
+  finds there. A newer wheel dropped in after the pre-flight would be
+  installed in preference to the audited one, with every recorded file
+  still matching and nothing to report. The wheelhouse now has to
+  contain exactly what the pre-flight recorded.
+- **the provenance note pointed at a licence text the reader never got.**
+  The Apache-2.0 files carry an SPDX identifier, which is a reference,
+  not a copy of the licence. The licence text now ships, as
+  `LICENSE-APACHE`.
+- **the loader instructions named a branch that is missing a file the
+  recipe ships**, and called an unmerged pull request "open". The
+  instructions now name the branch the files actually came from.
+- **one bind-mounted file quietly rolled the engine back.** The notice
+  now says so, and the identity manifest's description of that file says
+  so too.
+- **the shard count was given as "the official repo", which named
+  nothing** — and the three candidate repositories do not agree. The
+  count is now given per repository.
+
+## After the ladders: the boot path changed
+
+Two rungs above are history, and the recipe no longer behaves that way.
+The record stays as written — it is what the bring-up cost — but the
+current boot path is:
+
+- **rung 8 (Ray is not in the image) and rung 13 (the baked b12x is
+  API-older)**: the capacity profile no longer installs anything while
+  the container starts. Ray and the pinned b12x build are prepared OFF
+  the boot path, into a local wheelhouse, by
+  `launch/prepare-wheelhouse.sh` (one pre-flight per box); the boot then
+  installs from that directory with pip's index switched off, after
+  every sha256 and the pinned commit have been re-checked. The pinned
+  b12x commit is unchanged — only the timing moved.
+- **the engine is now identified, not assumed**: the container command
+  starts with the engine-identity gate (`launch/tp3-kit/`), so the files
+  that answer are the ones a reader can check. The shipped manifest is a
+  template until a reader fills it in.

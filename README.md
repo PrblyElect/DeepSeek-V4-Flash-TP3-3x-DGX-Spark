@@ -19,9 +19,9 @@ decode at ~100+ tok/s on code-class streams (speed, DSpark k=5), or a
 (capacity) — plus a measured CSF build (fastest single-stream; one
 upstream release away). Digest-pinned images, three crash-ladder
 FIXLOGs, acceptance gates, and a measured landmine ledger are included.
-Bring-up is four commands — see **Quick start** below. Both profiles
-are sized to share the boxes: host headroom for co-tenant services is
-part of the spec (**Headroom by design**).
+Bring-up is a handful of commands — see **Quick start** below. Both
+profiles are sized to share the boxes: host headroom for co-tenant
+services is part of the spec (**Headroom by design**).
 
 **Two validated launch profiles — plus a measured CSF build — for the
 abliterated "SuperDeepseek MQ" build of the 0731-lineage checkpoint,
@@ -33,12 +33,16 @@ names and port; you pick per deployment:**
   speculative decoding: single-stream decode is draft-acceptance-bound
   and therefore workload-dependent — **~100–108 tok/s on high-draftability
   streams (count/code class), ~45–50 tok/s on free prose** — with
-  aggregate climbing to **~200 tok/s at the 24-stream cap**.
+  aggregate climbing to **~200 tok/s at the 24-stream cap**. Nothing is
+  installed at container start: the kernels are baked into the image, so
+  the boot fetches nothing.
 - **CAPACITY** — chthonic-lineage image, zero spec decode, maximum KV:
   **~7.5–7.6M-token pool ≈ 7.2 simultaneous full-1M-context
   sessions** (at `MAX_NUM_BATCHED_TOKENS=4096`, see landmine 14) —
   the largest published pool for this model on any 2–3-Spark
-  deployment we're aware of.
+  deployment we're aware of. Its runtime dependencies (Ray, the pinned
+  b12x build) are installed from a local wheelhouse, prepared once per
+  box — the boot itself still fetches nothing.
 - **CSF build (compressed-scales)** — the same speed-profile serving
   shape on a CSF-packed copy of the checkpoint: **measured fastest of
   the three** (~5–10% single-stream prose decode over the fp8 speed
@@ -59,6 +63,15 @@ DSpark-at-TP=3 serving of the 0731-lineage V4 checkpoint (the published
 TP=3 DSpark lanes run V4.1 — credited below). The machinery both profiles
 build on is credited below and in `docs/FIXLOG.md`.
 
+**Why SPEED is the default.** The default is the profile with the fewest
+things that must be true before an engine can start. The speed profile
+installs nothing at container start: the b12x kernels and NCCL are baked
+into the image, there is no pip step, and there is no upstream fetch on
+the boot path. The capacity profile needs one extra, *offline* step — the
+wheelhouse pre-flight below — but its boot is equally fetch-free. Pick
+capacity when the KV pool is the constraint, not because it boots more
+easily.
+
 Prerequisites: three DGX Sparks wired as a full CX-7 RoCE triangle (one
 /24 per leg, MTU 9000) plus a management LAN, the checkpoint (~170 GB)
 and the digest-pinned image staged on every box, and Docker with GPU
@@ -76,8 +89,13 @@ From your workstation, after staging the checkpoint on all three boxes
 ./launch/ds4flash-tp3-up stage-env            # speed profile (default)
 ./launch/ds4flash-tp3-up start --yes          # workers→head; :8889 in ~12–15 min
 # capacity instead:
-ENV_SRC=config/cluster.env.capacity ./launch/ds4flash-tp3-up {preflight|pull-images|stage-env|start --yes}
+ENV_SRC=config/cluster.env.capacity ./launch/ds4flash-tp3-up {preflight|pull-images|stage-env|wheelhouse|start --yes}
 ```
+
+The capacity profile needs one extra step before its first boot —
+`wheelhouse` — because it installs Ray and the pinned b12x build from a
+local wheelhouse instead of from the network. The speed profile has no
+such step.
 
 Then verify the acceptance gates (Bring-up step 3) and read the
 landmines before your second boot. Full detail below.
@@ -350,7 +368,7 @@ prefill matches the best patched lanes, and neither does ours.
 |---|---|---|
 | Container | `eugr/spark-vllm-b12x:nightly-20261004` @ `sha256:66147fc1420dbd59a7bb1411697d81a8231c298105b61c5962179cd146b4a41b` | `ghcr.io/tonyd2wild/vllm-m3-chthonic:nccl230u1` @ `sha256:cdeae56d23d0d3f35a21c67c9f3e47979725a1ef9cd65faa6134b91871497be2` |
 | vLLM fork | karmic-kraken lineage (0.1.dev21553+gab86b7073), baked | `local-inference-lab/vllm` `dev/chthonic-consecration` (0.11.2.dev279+chthonic), baked |
-| b12x kernels | 1.5.0 baked | master @ `08e980c303b0…` (pip at container start — **required**; baked 0.20.0 is API-older) |
+| b12x kernels | 1.5.0 baked | pinned commit `08e980c303b0b6291700a6b85aa09aa874fc27cb`, installed from the offline wheelhouse (pre-flight, no boot-time fetch; baked 0.20.0 is API-older) |
 | NCCL | 2.32.x baked (no shims to fight) | 2.30.7 (image-built for sm_121; the boot banner must say 2.30.7, never the baked 2.30.4 shim) |
 | Executor | `mp` (`--nnodes 3 --node-rank`), no Ray | Ray 2.55.1 + V2 executor, plasma store capped 1 GiB/node |
 | TP=3 pad | 3 bind-mount patches (`patches-karmic/`) | fork-native virtual-TP + `patches/tilelang.py` for compile |
@@ -358,9 +376,13 @@ prefill matches the best patched lanes, and neither does ours.
 
 Checkpoint (both): any `deepseek_v4` checkpoint in the native mixed
 FP4+FP8 packaging; validated with `Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2xDGX`
-@ `2a7dd6a12d46` (48-shard repack — `EXPECTED_SHARDS` assumes it; the
-official HF repo is 46 shards — set `EXPECTED_SHARDS=46` if you stage
-it).
+@ `2a7dd6a12d46f752e290c6255140a42600897864` (48-shard repack — `EXPECTED_SHARDS` assumes it).
+
+The shard count is per-repository, and the three candidates do not
+agree: `deepseek-ai/DeepSeek-V4-Flash` ships **46** shards,
+`deepseek-ai/DeepSeek-V4-Flash-0731` ships **48** (it is the
+`base_model` tagged on the pinned checkpoint above), and the pinned
+repack ships **48**. Set `EXPECTED_SHARDS` to the one you stage.
 
 ## Bring-up
 
@@ -368,18 +390,22 @@ it).
 
 ```sh
 hf download Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2xDGX \
-  --revision 2a7dd6a12d46 --local-dir /home/YOURUSER/models/superdeepseek-v4-flash-abliterated-mq-2xdgx-2a7dd6a12d46
+  --revision 2a7dd6a12d46f752e290c6255140a42600897864 \
+  --local-dir /home/YOURUSER/models/superdeepseek-v4-flash-abliterated-mq-2xdgx-2a7dd6a12d46
 # then create the preflight marker the helpers gate on:
 echo '{"source":"huggingface","repo":"Jiunsong/SuperDeepseek-V4-Flash-abliterated-MQ-2xDGX"}' \
   > /home/YOURUSER/models/superdeepseek-v4-flash-abliterated-mq-2xdgx-2a7dd6a12d46/_DOWNLOAD_COMPLETE.json
 ```
 
-   Staging the **official** DeepSeek repo instead? It ships 46 shards,
-   not 48 — set `EXPECTED_SHARDS=46`, or repack to 48 to match the
-   validated layout.
+   Staging a different DeepSeek repo? The shard count is per-repository —
+   `deepseek-ai/DeepSeek-V4-Flash` ships 46 shards, and
+   `deepseek-ai/DeepSeek-V4-Flash-0731` ships 48 — so set
+   `EXPECTED_SHARDS` to the count you actually staged, or repack to 48
+   to match the validated layout.
 2. Edit the profile env: `config/cluster.env` (speed, default) or
    `config/cluster.env.capacity`, then run the **Quick start** sequence
-   above (`preflight` → `pull-images` → `stage-env` → `start --yes`).
+   above (`preflight` → `pull-images` → `stage-env` → `start --yes`;
+   the capacity profile adds `wheelhouse` before the first boot).
 
 3. Acceptance gates. Speed: the two boot-log pad lines
    ("Padded DeepSeek V4.1 attention for TP3: heads 64 -> 72 …" and
@@ -388,6 +414,174 @@ echo '{"source":"huggingface","repo":"Jiunsong/SuperDeepseek-V4-Flash-abliterate
    Capacity: the virtual-TP pad lines, `NCCL version 2.30.7`, the same
    probes. Both: `Maximum concurrency` / `GPU KV cache size` lines give
    the honest pool.
+
+### Boot-time installs are gone (capacity profile)
+
+The capacity profile used to install two things *while the container was
+starting*: Ray from PyPI, and a pinned b12x build straight from a GitHub
+URL. That put a network fetch on the boot path — the boot depended on
+PyPI and on an upstream host being reachable, and on whatever those
+served that day.
+
+Both fetches are now off the boot path:
+
+1. **Pre-flight, once per box.** `launch/prepare-wheelhouse.sh` fetches
+   the b12x source at the pinned commit (`B12X_COMMIT` in
+   `config/cluster.env.capacity`), verifies that commit id, builds the
+   wheel *inside the pinned image* (so the wheel matches the target
+   platform and interpreter), downloads the Ray wheels, and records every
+   file's sha256 in `wheelhouse.json`.
+2. **Boot.** The container mounts that directory read-only and installs
+   with pip's index switched off (`--no-index --find-links=/wheelhouse`),
+   but only after `launch/tp3-kit/verify-wheelhouse.py` has re-checked
+   every sha256 and the pinned commit. A wheelhouse that was edited or
+   truncated fails the boot instead of half-installing into it.
+
+```sh
+# once per box, from the workstation (all three boxes):
+ENV_SRC=config/cluster.env.capacity ./launch/ds4flash-tp3-up wheelhouse
+```
+
+The network is needed at pre-flight time, never at boot. The speed
+profile has no wheelhouse step at all: it installs nothing.
+
+### Proving which engine answered
+
+A digest-pinned image says which manifest was pulled. It does not say
+which **bytes** ran: the recipe bind-mounts patched engine files over the
+image's own, and the capacity profile installs a pinned b12x build on top
+of the baked one. `launch/tp3-kit/` is the kit that answers the question
+from inside the container, before the engine starts:
+
+- `engine-identity.json` — the manifest: a build stamp (the engine's own
+  package version) and the sha256 of the engine-critical files.
+- `boot-gate-identity.py` — the in-container gate. It is the first step
+  of the container command, so a mismatched engine fails the boot instead
+  of answering requests.
+- `make-engine-identity.py` — the generator that fills the manifest from
+  a container that is already up.
+
+**What is filled in by default: nothing.** The shipped manifest is a
+TEMPLATE. The hashes cannot be computed without an image, and an
+invented digest would be worse than no digest — so every claim in the
+shipped file is a clearly-marked placeholder, and the gate reports
+`NOT PINNED` for each of them and passes, so a fresh clone boots. Fill
+the manifest in and the gate becomes a real adoption gate:
+
+```sh
+# on the box that owns the container, with the lane up:
+python3 launch/tp3-kit/make-engine-identity.py --profile speed \
+  --container ds4flash-tp3-head --write
+# re-stage the kit so the boxes carry the filled manifest, then ask again:
+./launch/ds4flash-tp3-up stage-env
+./launch/ds4flash-tp3-up identity
+```
+
+`--profile` is `speed` or `capacity` — the two lineages ship different
+trees, so each has its own section and its own site-packages root. The
+gate hashes the files **as they are inside the container**, so the
+bind-mounted TP=3 patches are part of the claim: change a patch and the
+gate fails until the manifest is regenerated. A re-pinned image fails
+the gate until it is re-audited — that is the intended adoption gate,
+not a bug.
+
+### Reading the container command without starting it
+
+Both node helpers build the container command in **one** place — a
+`run_args` array — and then execute exactly that array
+(`docker run "${run_args[@]}"`). `PRINT_CMD=1` prints that array instead
+of running it: one argument per line, then the same command as a single
+copy-pasteable line. It starts no container, removes none, and touches
+no GPU.
+
+```sh
+# on the box you are about to start, with that box's own staged env.
+# stage-env installs the helpers under ~/.local/libexec/ds4flash-tp3/,
+# which is NOT on PATH by default — use the full path:
+PRINT_CMD=1 ~/.local/libexec/ds4flash-tp3/ds4flash-tp3-spark start         # capacity profile
+PRINT_CMD=1 ~/.local/libexec/ds4flash-tp3/ds4flash-tp3-karmic-spark start  # speed profile
+```
+
+This is the check for "did every value in `config/cluster.env` actually
+reach the container": the printed command *is* the command the box would
+run — the image digest, the mounted patches and wheelhouse, the engine
+env, the serve flags — not a copy of it that can drift from it.
+
+Run it **on the box being started**, with that box's own environment set
+the way the start path sets it. The role is derived from `hostname -s`
+against `HEAD_HOST`/`W1_HOST`/`W2_HOST` in the staged env file, so the
+printed `--node-rank`, `--master-addr`, `--node-ip-address` and container
+name are the ones *that* box would use; the env file itself is the same
+one the boot sources. The two profiles differ in more than the image:
+the capacity command mounts the wheelhouse and the TP=3 padding patch,
+and its `-c` string starts Ray and the offline pip install; the speed
+command mounts the three `patches-karmic/` files, and its `-c` string is
+the identity gate followed by `vllm serve`.
+
+### Where `--block-size 256` comes from
+
+256 is not inherited from a sibling model: it is the DS-V4-Flash
+lineage's own answer, in two independent places in the engine source:
+
+- the model's own sparse-MLA backend (`vllm/models/deepseek_v4/sparse_mla.py`)
+  declares `256` as its supported kernel block size, and the B12X
+  attention backend this profile selects inherits that declaration;
+- the sparse-attention indexer backend
+  (`vllm/v1/attention/backends/mla/indexer.py`) declares `256` too.
+
+The engine's block-size policy (`vllm/platforms/interface.py`) derives
+the block size from the resolved backend **only when the reader does not
+pass `--block-size`**; passing it explicitly makes the request visible
+in the command line instead of implied. The flag therefore restates what
+the model asks for.
+
+The sibling V4.1 lineage answers differently — its own backend and its
+indexer declare a smaller block size on this GPU generation — so "the
+other model uses 256" would not be an argument here. The value is pinned
+per profile in the env file (`BLOCK_SIZE`, next to `TENSOR_PARALLEL_SIZE`).
+
+Stated plainly: this is read out of the engine source of the pinned fork
+lineage, not measured on a running lane. It does not move any number in
+this README, and changing `BLOCK_SIZE` changes the KV geometry — and
+therefore the pool — so leave it alone unless you are re-measuring.
+
+### Short prompts under speculative decode
+
+Upstream vLLM tracks a prefill that can be misread as a uniform-decode
+batch: when a request's scheduled token count happens to equal
+`uniform_decode_query_len × num_reqs`, the prefill can be dispatched
+into the CUDA graph captured for speculative decode
+([vllm#53051](https://github.com/vllm-project/vllm/issues/53051)). The
+trigger is a prompt of exactly `uniform_decode_query_len` tokens, so a
+short prompt is enough to reach it.
+
+`launch/tp3-kit/spec-short-prompt-check.py` probes exactly that shape.
+It resolves `uniform_decode_query_len` — from the running engine's own
+command line, from a speculative config you pass, or from an explicit
+`--query-len` — builds a prompt of exactly that many tokens using the
+server's own tokenizer endpoint, sends it at temperature 0, and checks
+that the answer is non-empty, printable, not degenerate, and — when the
+prompt carries a marker — echoes that marker back.
+
+```sh
+# on the box, with the lane up:
+python3 launch/tp3-kit/spec-short-prompt-check.py \
+  --base-url http://127.0.0.1:8889 --model ds4flash \
+  --container ds4flash-tp3-head
+```
+
+It is a read-only probe — one request. Run it in a boot window against
+a lane being accepted, not against one carrying traffic.
+
+What this profile already does about it: the speed profile selects the
+model runner V2 (`VLLM_USE_V2_MODEL_RUNNER=1`), and in the pinned fork
+lineage that runner classifies a batch as uniform decode only when the
+batch contains no prefill — so the shape alone does not misdispatch
+there. Upstream filed the issue against the older runner (the report
+carries an `mrv1-only` label). Both statements are read out of the
+pinned fork's source, not measured on a lane; the check ships so the
+property is *verified* on the engine build actually in use rather than
+inferred from a flag, and so an engine swap is caught.
 
 ## The landmines (read before booting)
 
@@ -403,8 +597,12 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
    optimization: without them the boot dies at head divisibility
    (64 % 3), the MoE config assert (2048 % 3), or DSpark config
    validation — three different crashes, one patch set.
-3. **[C] Upgrade b12x at container start** to `08e980c` — the baked
-   0.20.0 wheel lacks `B12XMHCScratchPlan.bind(expected_m=…)`.
+3. **[C] The b12x build must be the pinned commit** — the baked
+   0.20.0 wheel lacks `B12XMHCScratchPlan.bind(expected_m=…)`. It is now
+   installed from the offline wheelhouse (pre-flight, not boot): run
+   `ENV_SRC=config/cluster.env.capacity ./launch/ds4flash-tp3-up wheelhouse`
+   once per box. The boot refuses to install from a wheelhouse whose
+   sha256s or pinned commit do not match what the pre-flight recorded.
 4. **[C] Route DS4 projections into b12x**: `VLLM_USE_B12X_WO_PROJECTION=1`,
    `VLLM_USE_B12X_MHC=1`, `B12X_MOE_FORCE_A8=1` — else DeepGEMM's
    o_proj path asserts on the padded TP=3 shapes.
@@ -479,7 +677,17 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
 - `launch/ds4flash-tp3-karmic-spark` — speed-profile node helper (mp
   bootstrap, 3-patch mounts, DSpark)
 - `launch/ds4flash-tp3-spark` — capacity-profile node helper (Ray V2,
-  b12x pin-upgrade, `COMPILE_MODE` eager/piecewise/full ladder)
+  offline wheelhouse install, `COMPILE_MODE` eager/piecewise/full ladder)
+- `launch/prepare-wheelhouse.sh` — capacity-profile pre-flight: fetches
+  the pinned b12x source, builds the wheel inside the pinned image,
+  downloads the Ray wheels, records every sha256 (the boot installs from
+  it with pip's index off)
+- `launch/tp3-kit/` — the in-container kit: `engine-identity.json` (the
+  manifest, a template until a reader fills it in),
+  `boot-gate-identity.py` (the gate that runs before the engine starts),
+  `make-engine-identity.py` (the generator), `verify-wheelhouse.py`
+  (the wheelhouse integrity check), `spec-short-prompt-check.py` (the
+  short-prompt probe under speculative decode)
 - `config/cluster.env` — speed profile, every pin in one file (default)
 - `config/cluster.env.capacity` — capacity profile
 - `patches-karmic/` — the TP=3 padding patches for the speed image
@@ -491,7 +699,11 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
 - `tools/csf/` — the offline CSF converter toolchain (codec, converter,
   round-trip validator) — runs on stock PyTorch today
 - `patches/tilelang.py` — dynamo-safe DeepGEMM probe for the capacity
-  image (upstream vLLM file, Apache-2.0 — keep its header)
+  image (upstream vLLM file, Apache-2.0 — keep its header). It is based
+  on the engine file as it stood **before** the upstream "Route DeepSeek
+  hc head through TileLang op" commit, and it is bind-mounted over the
+  image's own copy at boot — so a capacity boot runs the older routing.
+  See `NOTICE`.
 - `tools/validate-tp3-plan.py` — offline virtual-TP plan verifier for
   the *capacity* fork's plan machinery (runs against any checkout of
   the fork, or inside the pinned image)
@@ -499,8 +711,9 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
 - `docs/VALIDATION.md` — the measurement methodology behind every number
   in this repo (anti-contamination, workload split, corruption battery,
   recording discipline) — reuse it for your own A/B ladders
-- `LICENSE` — MIT for our scripts; `patches*/` upstream files stay
-  Apache-2.0
+- `LICENSE` — MIT for this repository's own scripts and documentation
+- `NOTICE` — the provenance notice for the modified upstream files
+  (Apache-2.0), which `patches*/` remain under
 - `.gitignore` — keeps logs and Python caches out of the tree
 
 ## What's next (roadmap, not needed for correctness)

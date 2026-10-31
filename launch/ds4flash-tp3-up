@@ -15,8 +15,10 @@
 #   ./launch/ds4flash-tp3-up preflight        # read-only checks on all three boxes
 #   ./launch/ds4flash-tp3-up resolve-digest   # print the image digest to pin in the env
 #   ./launch/ds4flash-tp3-up pull-images      # docker pull on all three boxes
-#   ./launch/ds4flash-tp3-up stage-env        # ship env + helper + patches to the boxes
+#   ./launch/ds4flash-tp3-up stage-env        # ship env + helper + patches + kit to the boxes
+#   ./launch/ds4flash-tp3-up wheelhouse       # capacity profile: build the offline wheelhouse
 #   ./launch/ds4flash-tp3-up start --yes      # workers first, then head; bounded watch
+#   ./launch/ds4flash-tp3-up identity         # prove which engine build is running
 #   ./launch/ds4flash-tp3-up prewarm          # tiny + ~15K-token JIT warmup (idempotent)
 #   ./launch/ds4flash-tp3-up stop --yes
 #   ./launch/ds4flash-tp3-up status|logs
@@ -127,6 +129,14 @@ cmd_preflight() {
     echo "  CX-7 links UP:    $links"
     [[ "$links" != "0" ]] || rc=1
     b "$host" "test -e /dev/infiniband" && echo "  /dev/infiniband:  ok" || { echo "  /dev/infiniband:  MISSING"; rc=1; }
+    kit=$(b "$host" 'test -f "$HOME/ds4flash-tp3/tp3-kit/boot-gate-identity.py" && echo yes || echo NO') || kit=NO
+    echo "  identity kit:     $kit"
+    [[ "$kit" == "yes" ]] || rc=1
+    if [[ "$(stack)" == chthonic ]]; then
+      wh=$(b "$host" 'test -f "$HOME/ds4flash-tp3/wheelhouse/wheelhouse.json" && echo yes || echo NO') || wh=NO
+      echo "  wheelhouse:       $wh"
+      [[ "$wh" == "yes" ]] || rc=1
+    fi
   done
   echo "-- overlap check: any other resident model lane must be parked before start --"
   [[ "$rc" -eq 0 ]] && echo "preflight: artifacts ready (lane state not modified)" || { echo "preflight: FAILURES above"; return 1; }
@@ -153,17 +163,44 @@ cmd_pull_images() {
 cmd_stage_env() {
   local_artifacts_ok
   local host f
-  echo "-- staging STACK=$(stack): $STAGED_ENV + $HELPER_NAME + $PATCH_DIR/"
+  echo "-- staging STACK=$(stack): $STAGED_ENV + $HELPER_NAME + $PATCH_DIR/ + tp3-kit/"
   for host in "$BOX_HEAD" "$BOX_W1" "$BOX_W2"; do
-    b "$host" "mkdir -p $LIBEXEC_DIR $STAGE_DIR/$PATCH_DIR"
+    b "$host" "mkdir -p $LIBEXEC_DIR $STAGE_DIR/$PATCH_DIR $STAGE_DIR/tp3-kit"
     scp -q "${SSH_OPTS[@]}" "$ENV_SRC" "$host:$STAGE_DIR/$STAGED_ENV"
     scp -q "${SSH_OPTS[@]}" "$HELPER_SRC" "$host:$LIBEXEC_DIR/$HELPER_NAME"
     for f in "${PATCH_FILES[@]}"; do
       scp -q "${SSH_OPTS[@]}" "$RECIPE_ROOT/$PATCH_DIR/$f" "$host:$STAGE_DIR/$PATCH_DIR/$f"
     done
+    # The engine-identity kit: the gate that runs inside the container
+    # before the engine starts, and the manifest it checks.
+    scp -rq "${SSH_OPTS[@]}" "$RECIPE_ROOT/launch/tp3-kit/." "$host:$STAGE_DIR/tp3-kit/"
     b "$host" "chmod 0755 $LIBEXEC_DIR/$HELPER_NAME"
   done
-  echo "staged env + patches + helper on all three boxes"
+  echo "staged env + patches + helper + tp3-kit on all three boxes"
+}
+
+cmd_prepare_wheelhouse() {
+  stack_bits
+  [[ "$(stack)" == chthonic ]] || {
+    echo "the wheelhouse pre-flight belongs to the capacity profile (this one: $(stack))" >&2
+    echo "the speed profile installs nothing at boot — it needs no wheelhouse" >&2
+    exit 1; }
+  local host
+  for host in "$BOX_HEAD" "$BOX_W1" "$BOX_W2"; do
+    echo "== preparing the offline wheelhouse on $host =="
+    b "$host" "mkdir -p $LIBEXEC_DIR $STAGE_DIR"
+    scp -q "${SSH_OPTS[@]}" "$RECIPE_ROOT/launch/prepare-wheelhouse.sh" "$host:$LIBEXEC_DIR/prepare-wheelhouse.sh"
+    b "$host" "chmod 0755 $LIBEXEC_DIR/prepare-wheelhouse.sh"
+    b "$host" "$LIBEXEC_DIR/prepare-wheelhouse.sh --env-file $STAGE_DIR/$STAGED_ENV"
+  done
+  echo "wheelhouse ready on all three boxes — the boot now fetches nothing"
+}
+
+cmd_identity() {
+  stack_bits
+  local profile="capacity"
+  [[ "$(stack)" == karmic ]] && profile="speed"
+  b "$BOX_HEAD" "docker exec ds4flash-tp3-head python3 /opt/tp3-kit/boot-gate-identity.py --profile $profile --strict"
 }
 
 cmd_prewarm() {
@@ -267,11 +304,13 @@ case "${1:-status}" in
   resolve-digest) cmd_resolve_digest ;;
   pull-images)    lock; cmd_pull_images ;;
   stage-env)      lock; cmd_stage_env ;;
+  wheelhouse)     lock; cmd_prepare_wheelhouse ;;
+  identity)       cmd_identity ;;
   start)          shift; cmd_start "$@" ;;
   prewarm)        lock; cmd_prewarm ;;
   stop)           shift; cmd_stop "$@" ;;
   status)         cmd_status ;;
   logs)           cmd_logs ;;
-  *) echo "usage: ds4flash-tp3-up {preflight|resolve-digest|pull-images|stage-env|start --yes|prewarm|stop --yes|status|logs}" >&2
+  *) echo "usage: ds4flash-tp3-up {preflight|resolve-digest|pull-images|stage-env|wheelhouse|identity|start --yes|prewarm|stop --yes|status|logs}" >&2
      echo "       ENV_SRC=config/cluster.env.capacity selects the capacity profile" >&2; exit 2 ;;
 esac

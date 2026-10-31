@@ -1,127 +1,359 @@
-# How this recipe validates claims (methodology)
+# VALIDATION — ds4flash-tp3
 
-Every throughput, latency, pool-size, and integrity number in this
-repo's README and FIXLOG was produced under the same discipline
-(hardware facts like cable/drain/MTU notes aside). Reproduce it and
-your numbers are comparable to ours; skip any part and they aren't.
-The bring-up crash ladders live in `FIXLOG.md`; this file is the
-measurement method behind the numbers.
+The acceptance gates, and the measurement method behind every number in
+this repository's README and FIXLOG. The bring-up crash ladders live in
+`FIXLOG.md`; this file is the method and the commands.
 
-## 1. Read the landmine ledger first
+Run the gates after every boot, in the order below. A lane that passes a
+single probe is not validated — the gate is a mixed battery, and the
+last section says what that means.
 
-`FIXLOG.md` is the ledger of everything already tried and its outcome —
-the crash rungs, the tuning notes, the measured rejections. Before
-changing a setting here, check it: a lever with a recorded result
-(some tuning notes end in explicit "don't retry" verdicts with numbers)
-is settled unless your stack changed (new image lineage, new
-checkpoint). One variable per boot; a boot that changes two things
-proves nothing either way.
+The placeholders in the commands are the ones the profile env files use:
+`HEAD_IP` (the head's management-LAN address), `API_PORT` (the served
+port) and `SERVED_NAME` (the model name clients send). Set them from
+your staged env file:
 
-## 2. Harness before boots
+```sh
+# on the head box, from the staged env:
+set -a; . ~/ds4flash-tp3/.env.tp3-ds-karmic; set +a   # speed profile
+#   (.env.tp3-ds for the capacity profile)
+export HEAD_IP API_PORT SERVED_NAME
+```
 
-Stage a benchmark script on the head node **before** touching any knob,
-stdlib-only so it runs anywhere:
+---
 
-- **Anti-contamination**: every prefill-class prompt embeds a fresh
-  random nonce. Without this, prefix caching replays your "new" prompt
-  and reports cache hits as prefill — we have measured same-payload
-  "prefill" at 10–15× its true rate this way.
-- **Workload split for acceptance-bound metrics.** With speculative
-  decoding, speed depends on draft acceptance, which depends on what
-  the model is writing. Always measure separately: a high-draftability
-  stream (count-to-N or code), free prose, N-way parallel aggregate
-  (4/8/16), prefill at a realistic long-context size, and the
-  per-position acceptance histogram from the engine's Prometheus
-  metrics (`vllm:spec_decode_num_accepted_tokens_per_pos_total`). A
-  single headline number hides all of this; publish the split.
-- **Corruption battery next to every speed run**: exact-repeat prompts
-  at temperature 0 (any non-ASCII or drift = fail), a strict-JSON
-  request, and a nonce'd needle-in-haystack at a prompt length beyond
-  whatever was previously exercised. A speed win on a lane that
-  corrupts output is not a win.
-- **One sacrificial long-prefill request after the server reports
-  healthy** — the first long prefill pays ~2× TTFT in JIT compilation.
-  It must never land inside a measurement.
-- **Idle-gate solo measurements.** Before any solo/tier/speed reading,
-  GET `/metrics` and require `vllm:num_requests_running` == 0 and
-  `vllm:num_requests_waiting` == 0, immediately before measuring. A
-  "slow" reading taken with traffic in flight — your own warmup
-  replays, scheduled jobs, co-tenant requests, other clients — is an
-  unlabeled mixed number, not a property of the boot: don't act on it,
-  re-measure idle. Post-boot warmup traffic overlaps exactly the window
-  a fresh boot first gets probed; let it settle or verify idleness.
-- **Quote the engine's own pool** (`GPU KV cache size` from the boot
-  log), never an estimate.
+## 1. Health and the served model
 
-## 3. Boot hygiene
+```sh
+curl -s -o /dev/null -w "%{http_code}\n" http://$HEAD_IP:$API_PORT/health
+# expected: 200
 
-Workers first, head last. Drop filesystem caches on every rank before
-boot (the driver OOMs during load otherwise). Never `docker restart` —
-fresh `docker run` every time. Poll `/health` with a bound generous for
-the stack: speculative builds spend 12–15+ minutes autotuning and
-priming thousands of kernels before first light, and declaring a hang
-at minute 8 throws away a good boot.
+curl -s http://$HEAD_IP:$API_PORT/v1/models | jq -r '.data[].id'
+# expected: the served names (SERVED_NAME and its alias)
+```
 
-## 4. Record as you go
+## 2. The per-profile boot-log gates
+
+These are the lines the boot must print; they are the profile's own
+proof that the TP=3 padding and the executor landed.
+
+```sh
+# speed profile: the two padding lines, the drafter, the NCCL banner
+docker logs ds4flash-tp3-head 2>&1 | grep -E \
+  "Padded DeepSeek V4.1 attention for TP3|Padded DeepSeek V4 MoE intermediate"
+docker logs ds4flash-tp3-head 2>&1 | grep -iE "dspark.*(enabled|spec)" | head -3
+docker logs ds4flash-tp3-head 2>&1 | grep -iE "NCCL version" | head -1
+# expected: both padding lines present; the drafter enabled; one NCCL banner
+
+# capacity profile: the virtual-TP pad lines and the NCCL banner
+docker logs ds4flash-tp3-head 2>&1 | grep -iE "NCCL version" | head -1
+# expected: the banner names the image's NCCL version, never the baked shim
+```
+
+### Boot hygiene
+
+Workers first, head last. Drop the filesystem caches on every rank
+before the boot (the driver OOMs during load otherwise), re-apply the
+fabric MTU after a reboot, and never `docker restart` — a fresh
+`docker run` every time.
+
+```sh
+# on every rank, before the boot
+sync; echo 3 > /proc/sys/vm/drop_caches
+ip link set enp1s0f0np0 mtu 9000
+ip link set enp1s0f1np1 mtu 9000
+ip -br link | grep -E 'enp1s0f[01]np[01]'
+# expected: both CX-7 links UP at mtu 9000
+```
+
+Poll `/health` with a bound generous for the stack: a speculative build
+spends 12-15+ minutes autotuning and priming thousands of kernels before
+first light, and declaring a hang at minute 8 throws away a good boot.
+
+## 3. The engine-identity gate — which engine answered
+
+The gate runs inside the container before the engine starts, and it is
+re-runnable at any time:
+
+```sh
+docker exec ds4flash-tp3-head python3 /opt/tp3-kit/boot-gate-identity.py --profile speed
+# expected: ENGINE-IDENTITY PASS
+
+# with the manifest filled in, --strict also fails on an unpinned claim
+docker exec ds4flash-tp3-head python3 /opt/tp3-kit/boot-gate-identity.py --profile speed --strict
+```
+
+The shipped manifest is a template, so the default run reports
+`NOT PINNED` per claim and still passes. Filling it in (see the
+README's "Proving which engine answered") turns this into the adoption
+gate: a re-pinned image fails it until it is re-audited.
+
+## 4. The container command, without starting it
+
+The printed command is the command the box would run — it is built in
+one place and executed from the same array.
+
+```sh
+PRINT_CMD=1 ~/.local/libexec/ds4flash-tp3/ds4flash-tp3-karmic-spark start   # speed profile
+PRINT_CMD=1 ~/.local/libexec/ds4flash-tp3/ds4flash-tp3-spark start          # capacity profile
+# expected: the argv, one argument per line, then a copy-pasteable line.
+# Nothing is started: no container, no GPU.
+```
+
+Run it on the box being started, with that box's staged env — the role
+derivation (`hostname -s` against `HEAD_HOST`/`W1_HOST`/`W2_HOST`) is
+what fills the rank and the node address.
+
+## 5. Deterministic generation (temp 0) — short prompts
+
+Send the same prompt three times; the outputs must be identical.
+
+```sh
+for i in 1 2 3; do
+  curl -s http://$HEAD_IP:$API_PORT/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"$SERVED_NAME\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 17*23? Just the number.\"}],\"max_tokens\":30,\"temperature\":0,\"chat_template_kwargs\":{\"thinking\":false}}" \
+    | jq -r '.choices[0].message.content'
+done
+# expected: identical output x3
+```
+
+**What this gate does not cover.** These prompts are short — they never
+cross the chunked-prefill boundary. The failure mode that matters lives
+in the *last chunk* of a chunked prefill when that chunk runs as a
+piecewise CUDA graph. Gate 9 is the one that reaches it; run both.
+
+## 6. Strict JSON compliance
+
+```sh
+curl -s http://$HEAD_IP:$API_PORT/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"$SERVED_NAME\",\"messages\":[{\"role\":\"user\",\"content\":\"Return a JSON object with key answer and value 42. Nothing else.\"}],\"max_tokens\":50,\"temperature\":0,\"chat_template_kwargs\":{\"thinking\":false}}" \
+  | jq -r '.choices[0].message.content'
+# expected: exactly {"answer":42} (reasoning stripped by the parser)
+```
+
+## 7. Tool calling
+
+```sh
+curl -s http://$HEAD_IP:$API_PORT/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"$SERVED_NAME\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 3+5? One word.\"}],\"max_tokens\":30,\"temperature\":0,\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"calc\",\"description\":\"calculator\",\"parameters\":{\"type\":\"object\",\"properties\":{\"expr\":{\"type\":\"string\"}}}}}],\"tool_choice\":\"auto\",\"chat_template_kwargs\":{\"thinking\":false}}" \
+  | jq -r '.choices[0].message.content'
+# expected: a direct answer (no tool call needed for simple math); no error
+```
+
+## 8. Short prompts under speculative decode
+
+A prefill whose scheduled token count equals
+`uniform_decode_query_len * num_reqs` can be misread as a uniform-decode
+batch (upstream vLLM #53051). The probe resolves that length from the
+running engine, builds a prompt of exactly that many tokens, and checks
+the answer at temperature 0.
+
+```sh
+python3 launch/tp3-kit/spec-short-prompt-check.py \
+  --base-url http://$HEAD_IP:$API_PORT --model $SERVED_NAME \
+  --container ds4flash-tp3-head
+# expected: SPEC-SHORT-PROMPT PASS
+```
+
+Read-only: one request. Run it against a lane being accepted, not one
+carrying traffic.
+
+If the probe cannot build a prompt carrying an echo marker, it falls back
+to a marker-free prompt of exactly the right token count and checks only
+that the answer is sane — the marker assertion is then **not** made. Read
+the probe's own output to see which path it took: a fallback run proves
+the shape is accepted, not that the marker survived.
+
+## 9. The corruption battery
+
+Next to every speed run, on the same boot: exact repeats at temperature
+0, a strict-JSON request, and a needle in a haystack that is longer
+than anything exercised so far. A speed win on a lane that corrupts
+output is not a win.
+
+```sh
+# 9a. exact repeat — any drift or non-ASCII is a failure
+for i in 1 2; do
+  curl -s http://$HEAD_IP:$API_PORT/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"$SERVED_NAME\",\"messages\":[{\"role\":\"user\",\"content\":\"List three prime numbers.\"}],\"max_tokens\":40,\"temperature\":0,\"chat_template_kwargs\":{\"thinking\":false}}" \
+    | jq -r '.choices[0].message.content' | tee "/tmp/repeat-$i.txt"
+done
+diff /tmp/repeat-1.txt /tmp/repeat-2.txt && echo "REPEAT IDENTICAL"
+
+# 9b. strict JSON — the same gate as section 6, in the battery
+# 9c. needle in a haystack — build a haystack with a fresh nonce, and
+#     ask for the nonce back. The nonce is what makes this honest:
+#     without it, prefix caching replays the "new" prompt and reports
+#     cache hits as retrieval.
+NONCE=$(python3 -c "import uuid; print(uuid.uuid4().hex[:12])")
+python3 - "$NONCE" "$SERVED_NAME" > /tmp/haystack.json <<'PY'
+import json, sys
+nonce, model = sys.argv[1], sys.argv[2]
+filler = "The quarterly logistics review covers inventory, freight, and demand planning. " * 900
+print(json.dumps({
+    "model": model,
+    "messages": [{"role": "user", "content":
+                  f"{filler}\nThe access code for the locked cabinet is {nonce}. "
+                  f"Reply with the access code and nothing else.\n{filler}"}],
+    "max_tokens": 24, "temperature": 0,
+    "chat_template_kwargs": {"thinking": False},
+}))
+PY
+curl -s http://$HEAD_IP:$API_PORT/v1/chat/completions \
+  -H "Content-Type: application/json" -d @/tmp/haystack.json \
+  | jq -r '.choices[0].message.content'
+# expected: the nonce, verbatim
+```
+
+## 10. Anti-contamination
+
+Every prefill-class prompt embeds a fresh random nonce (gate 9c is the
+worked example). Without one, prefix caching replays the "new" prompt
+and reports cache hits as prefill — measured in the 10–15× range on
+this stack. The same rule applies to every long-context claim: a fresh
+nonce per measurement, never a replayed payload.
+
+## 11. The idle gate
+
+Before any solo, tier or speed reading, require an idle engine:
+
+```sh
+curl -s http://$HEAD_IP:$API_PORT/metrics | grep -E "^vllm:num_requests_(running|waiting)"
+# expected: both zero
+```
+
+A "slow" reading taken with traffic in flight — warmup replays,
+scheduled jobs, co-tenant requests, other clients — is an unlabeled
+mixed number, not a property of the boot. Do not act on it; re-measure
+idle. Post-boot warmup traffic overlaps exactly the window a fresh boot
+first gets probed: let it settle, or verify idleness.
+
+## 12. The workload split for acceptance-bound metrics
+
+With speculative decoding, speed depends on draft acceptance, which
+depends on what the model is writing. Measure the classes separately —
+high-draftability (count/code), free prose, N-way aggregate (4/8/16),
+prefill at a realistic long-context size — and publish the split, not a
+single number. The acceptance histogram comes from the engine's own
+metrics:
+
+```sh
+curl -s http://$HEAD_IP:$API_PORT/metrics \
+  | grep -E "^vllm:spec_decode_num_accepted_tokens_per_pos_total"
+# expected: one counter per draft position
+```
+
+A single headline number hides all of this.
+
+## 13. The KV pool, from the boot log
+
+Quote the engine's own pool, never an estimate.
+
+```sh
+docker logs ds4flash-tp3-head 2>&1 | grep -E "GPU KV cache size|Maximum concurrency"
+# expected: the pool and the concurrency figures the boot reports
+```
+
+## 14. Image identity
+
+The digest must be the pinned one, on every box:
+
+```sh
+docker image inspect eugr/spark-vllm-b12x:nightly-20261004@sha256:66147fc1420dbd59a7bb1411697d81a8231c298105b61c5962179cd146b4a41b \
+  --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+  | grep -F 'sha256:66147fc1420dbd59a7bb1411697d81a8231c298105b61c5962179cd146b4a41b'
+# expected: the pinned digest
+```
+
+The digest proves which manifest was pulled; the engine-identity gate
+(section 3) proves what executes inside the container.
+
+## 15. The wheelhouse (capacity profile)
+
+The capacity profile installs from a local wheelhouse and fetches
+nothing at boot. The boot verifies it first — this is the same check,
+run by hand:
+
+```sh
+docker exec ds4flash-tp3-head python3 /opt/tp3-kit/verify-wheelhouse.py \
+  --wheelhouse /wheelhouse
+# expected: WHEELHOUSE PASS
+```
+
+If the wheelhouse is missing or its sha256s do not match the pre-flight
+record, the boot refuses to install from it — which is the point.
+
+## 16. The offline CSF toolchain
+
+The CSF converter runs on stock PyTorch, with no GPU and no engine:
+
+```sh
+python3 tools/csf/roundtrip_validate.py SOURCE_SHARD CONVERTED_SHARD
+# expected: every compressed plane decodes bit-exact to the source, and
+# every pass-through tensor is byte-identical
+
+python3 tools/validate-tp3-plan.py PATH_TO_virtual_tp.py
+# expected: the virtual-TP plan for the checkpoint's geometry validates
+```
+
+## 17. Recording discipline
 
 Every cycle's full output is teed to a timestamped file; on failure,
-all three ranks' logs are captured before anything else happens. Keep
-a running experiment log with, per cycle: the exact config delta, boot
-facts (pool, time-to-healthy), **all** the numbers per workload, the
-decision, and the trigger — what caused what. End the window with a
-summary table and a "do not re-derive" trigger map. Numbers that exist
-only in a terminal scrollback don't exist.
+all three ranks' logs are captured before anything else happens.
 
-## 5. Honest reporting rules
+```sh
+OUT="$HOME/measurements/$(date +%Y%m%d-%H%M%S)-cycle.log"
+mkdir -p "$(dirname "$OUT")"
+# ... the measurement command, teed:
+your-measurement-command 2>&1 | tee -a "$OUT"
+```
 
-- A repeated-boot jitter band (±6–8% on the speed profile's KV pool,
-  ±10% on capacity's; ±3–5% on throughput
-  samples here) means ranges, not points — and A/B verdicts need
-  non-overlapping samples, not vibes.
+Keep a running log with, per cycle: the exact config delta, the boot
+facts (pool, time-to-healthy), all the numbers per workload, the
+decision, and the trigger — what caused what. Numbers that exist only
+in a terminal scrollback do not exist. End the window with a summary
+table and a "do not re-derive" trigger map.
+
+## 18. The mixed battery — the acceptance gate
+
+A boot is not accepted because single-class probes pass. The gate is a
+**mixed battery**: interactive streams, chat-class requests, and the
+co-tenant services, if any, all in flight at the same time, with host
+memory sampled throughout.
+
+```sh
+# co-tenant view while the lane is under the mixed load
+watch -n 2 "free -g | awk '/Mem/ {print \$3, \$7}'"
+# expected: the head box keeps its documented headroom floor
+```
+
+A lane that only survives isolated benchmarks is not validated for the
+two-surface operating mode this recipe targets (coding harness + chat
+simultaneously). Build the mixed battery from the classes above and run
+it beside every adoption decision.
+
+---
+
+## Honest reporting rules
+
+- A repeated-boot jitter band (a few percent on the KV pool, a few
+  percent on throughput samples) means ranges, not points — and A/B
+  verdicts need non-overlapping samples, not vibes.
 - Speed settings interact with capture sizes and pool sizes; when a
   faster setting costs memory, publish both variants and the workload
-  each suits (see the capture-size landmine in the README; FIXLOG carries the tuning note).
-- Where our measurement disagrees with the model card's official
-  recommendation, we publish both and say which weights the measurement
+  each suits.
+- Where the measurement disagrees with the model card's official
+  recommendation, publish both and say which weights the measurement
   was taken on.
 - "Not tested / not claimed" is a section in the README, not a
   footnote. Sustained-load windows, contexts beyond what was exercised,
   and untested quantizations stay unclaimed.
 
-## 6. The acceptance gate is a mixed battery
+## Pass criteria
 
-A boot is not "accepted" because single-class probes pass. The gate
-this recipe actually uses before calling a lane healthy is a **mixed
-battery**: interactive streams, chat-class requests, and your co-tenant
-services, if any (the validated stack carried a reranker and an
-embedder beside the lane), all in flight **at the same time**, with
-host `MemAvailable` sampled
-throughout. A lane that only survives isolated benchmarks is not
-validated for the two-surface operating mode this recipe targets
-(coding harness + chat simultaneously). Build the mixed battery from
-the harness classes above and run it beside every adoption decision;
-the per-profile boot-log gates in order are the README's Bring-up
-step 3.
-
-## 7. CSF-build validation (third ladder)
-
-Layered on the same harness; adds format-level proofs beneath the
-behavioral battery:
-
-- **Codec round-trip**: decode→re-encode reproduces the published plane
-  bytes exactly (bases, selector bits, exception ordering) — the codec
-  is re-derived from the loader's own decode, so agreement is a proof,
-  not a coincidence.
-- **Converter proof**: on a real same-geometry checkpoint, compressed
-  planes decode bit-exact to the source scales and every pass-through
-  tensor is byte-identical; inventories match the reference layout.
-- **Cross-base behavioral check**: fixed temp-0 prompts against the fp8
-  and CSF builds — same weights through different quantization paths.
-  Byte-identity is *not* expected (different kernels round
-  differently); the gate is rephrase-only differences and zero
-  non-printable characters.
-- **Same-day paired A/B** for any adoption claim: both boots the same
-  day, identical settings, one variable, 3-sample non-overlapping bands
-  (boot-to-boot pool jitter is ±6–8% — single-boot deltas are noise).
-- **Determinism gate**: normalized text (a benign leading-space
-  alternation exists under spec decode + prefix caching — see FIXLOG).
+Every gate above must pass. A failed gate is diagnosed forward from the
+FIXLOG, never rolled back automatically.

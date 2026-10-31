@@ -16,6 +16,7 @@ action="${1:-status}"
 
 env_file="${DS4FLASH_ENV:-$HOME/ds4flash-tp3/.env.tp3-ds-karmic}"
 cache_root="${DS4FLASH_CACHE:-$HOME/.cache/ds4flash-tp3}"
+kit_dir="${DS4FLASH_KIT:-$HOME/ds4flash-tp3/tp3-kit}"
 mgmt_if="${MGMT_IF:-enP7s7}"
 # One GPU owner per box: refuse to start beside any resident model lane.
 # Tune the pattern to whatever else runs on your boxes.
@@ -50,6 +51,8 @@ preflight() {
     echo "image missing: $image" >&2; return 1; }
   test -e /dev/infiniband || { echo "/dev/infiniband absent" >&2; return 1; }
   ip -br link | grep -Eq 'enp1s0f[01]np[01].*UP' || { echo "CX-7 link down" >&2; return 1; }
+  test -f "$kit_dir/boot-gate-identity.py" || {
+    echo "engine-identity kit missing in $kit_dir (re-run stage-env)" >&2; return 1; }
   local busy
   busy=$(docker ps --format '{{.Names}}' | grep -Ei "$resident_pattern" | grep -v "$container" || true)
   [[ -z "$busy" ]] || { echo "refusing: resident model container(s): $busy" >&2; return 1; }
@@ -58,7 +61,7 @@ preflight() {
 serve_args=(
   --served-model-name "$SERVED_NAME" deepseek
   --trust-remote-code
-  --tensor-parallel-size 3
+  --tensor-parallel-size "${TENSOR_PARALLEL_SIZE:-3}"
   --pipeline-parallel-size 1
   --distributed-executor-backend mp
   --nnodes 3
@@ -66,7 +69,7 @@ serve_args=(
   --master-addr "$HEAD_IP"
   --master-port "$MASTER_PORT"
   --kv-cache-dtype "$KV_CACHE_DTYPE"
-  --block-size 256
+  --block-size "${BLOCK_SIZE:-256}"
   --max-model-len "$MAX_MODEL_LEN"
   --max-num-seqs "$MAX_NUM_SEQS"
   --max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS"
@@ -97,15 +100,15 @@ if [[ "$rank" == 0 ]]; then
   serve_args+=(--host 0.0.0.0 --port "$API_PORT")
 fi
 
-start() {
-  preflight
-  mkdir -p "$cache_root"/{vllm,flashinfer,triton,torch,nccl,karmic-cache}
-  docker rm -f "$container" 2>/dev/null || true
+# The container command is built in ONE place. build_run_args fills the
+# run_args array and the start path executes exactly that array, so the
+# PRINT_CMD mode prints what the box would run — not a copy that can drift.
+build_run_args() {
   # TP3 padding patches (config-level V4->V4.1 delegation + v4 attention
   # allow_tp_padding) — mandatory: without them the boot dies at head
   # divisibility (64 % 3).
   local pk="$HOME/ds4flash-tp3/patches-karmic"
-  local patch_mounts=()
+  local -a patch_mounts=()
   if [[ -f "$pk/config.py" && -f "$pk/v4-attention.py" && -f "$pk/v4-model.py" ]]; then
     patch_mounts=(
       -v "$pk/config.py":/usr/local/lib/python3.12/dist-packages/vllm/model_executor/models/config.py:ro
@@ -115,74 +118,105 @@ start() {
   else
     echo "TP3 padding patches missing in $pk — boot will fail at head divisibility" >&2; return 1
   fi
+  run_args=(
+    -d --name "$container"
+    --privileged --network host --ipc host
+    --shm-size 64g --ulimit memlock=-1 --ulimit stack=67108864
+    --gpus all
+    --restart no
+    --entrypoint bash
+    -v "$MODEL_DIR":"$MODEL_DIR":ro
+    "${patch_mounts[@]}"
+    -v "$kit_dir":/opt/tp3-kit:ro
+    -v "$cache_root/vllm":"/root/.cache/vllm"
+    -v "$cache_root/flashinfer":"/root/.cache/flashinfer"
+    -v "$cache_root/triton":"/root/.cache/triton"
+    -v "$cache_root/torch":"/root/.cache/torch"
+    -v "$cache_root/karmic-cache":"/cache"
+    -e NCCL_IB_DISABLE="$NCCL_IB_DISABLE"
+    -e NCCL_NET="$NCCL_NET"
+    -e NCCL_NET_PLUGIN="$NCCL_NET_PLUGIN"
+    -e NCCL_IB_HCA="$hca"
+    -e NCCL_IB_GID_INDEX="$NCCL_IB_GID_INDEX"
+    -e NCCL_IB_ADDR_FAMILY="$NCCL_IB_ADDR_FAMILY"
+    -e NCCL_IB_ROCE_VERSION_NUM="$NCCL_IB_ROCE_VERSION_NUM"
+    -e NCCL_IB_SUBNET_AWARE_ROUTING="$NCCL_IB_SUBNET_AWARE_ROUTING"
+    -e NCCL_P2P_DISABLE="$NCCL_P2P_DISABLE"
+    -e NCCL_NVLS_ENABLE="$NCCL_NVLS_ENABLE"
+    -e NCCL_PROTO="$NCCL_PROTO"
+    -e NCCL_BUFFSIZE="$NCCL_BUFFSIZE"
+    -e NCCL_LL128_BUFFSIZE="$NCCL_LL128_BUFFSIZE"
+    -e NCCL_MAX_NCHANNELS="$NCCL_MAX_NCHANNELS"
+    -e NCCL_MIN_NCHANNELS="$NCCL_MIN_NCHANNELS"
+    -e NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
+    -e NCCL_SOCKET_IFNAME="$mgmt_if"
+    -e GLOO_SOCKET_IFNAME="$mgmt_if"
+    -e TP_SOCKET_IFNAME="$mgmt_if"
+    -e VLLM_HOST_IP="$host_ip"
+    -e CUTE_DSL_ARCH="$CUTE_DSL_ARCH"
+    -e VLLM_USE_AOT_COMPILE="$VLLM_USE_AOT_COMPILE"
+    -e VLLM_USE_MEGA_AOT_ARTIFACT="$VLLM_USE_MEGA_AOT_ARTIFACT"
+    -e VLLM_MEMORY_PROFILE_INCLUDE_ATTN="$VLLM_MEMORY_PROFILE_INCLUDE_ATTN"
+    -e VLLM_USE_FLASHINFER_SAMPLER="$VLLM_USE_FLASHINFER_SAMPLER"
+    -e VLLM_USE_V2_MODEL_RUNNER="$VLLM_USE_V2_MODEL_RUNNER"
+    -e VLLM_USE_B12X_WO_PROJECTION="$VLLM_USE_B12X_WO_PROJECTION"
+    -e VLLM_USE_B12X_MHC="$VLLM_USE_B12X_MHC"
+    -e VLLM_USE_B12X_FP8_GEMM="$VLLM_USE_B12X_FP8_GEMM"
+    -e VLLM_USE_B12X_MOE="$VLLM_USE_B12X_MOE"
+    -e VLLM_USE_B12X_SPARSE_INDEXER="$VLLM_USE_B12X_SPARSE_INDEXER"
+    -e B12X_MLA_SM120_UNIFIED="$B12X_MLA_SM120_UNIFIED"
+    -e B12X_MOE_FORCE_A8="$B12X_MOE_FORCE_A8"
+    -e B12X_W4A8_TINY_DECODE="$B12X_W4A8_TINY_DECODE"
+    -e VLLM_MOE_SKIP_PADDING="$VLLM_MOE_SKIP_PADDING"
+    -e VLLM_PLUGINS="$VLLM_PLUGINS"
+    -e VLLM_ALLOW_LONG_MAX_MODEL_LEN="$VLLM_ALLOW_LONG_MAX_MODEL_LEN"
+    -e VLLM_ENGINE_READY_TIMEOUT_S="$VLLM_ENGINE_READY_TIMEOUT_S"
+    -e VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS="$VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS"
+    -e VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS="$VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS"
+    -e SAFETENSORS_FAST_GPU="$SAFETENSORS_FAST_GPU"
+    -e OMP_NUM_THREADS="$OMP_NUM_THREADS"
+    -e TORCH_NCCL_ASYNC_ERROR_HANDLING="$TORCH_NCCL_ASYNC_ERROR_HANDLING"
+    -e CUDA_DEVICE_MAX_CONNECTIONS="$CUDA_DEVICE_MAX_CONNECTIONS"
+    -e PYTORCH_CUDA_ALLOC_CONF="$PYTORCH_CUDA_ALLOC_CONF"
+    -e TRITON_CACHE_DIR=/cache/triton
+    -e TORCHINDUCTOR_CACHE_DIR=/cache/inductor
+    -e CUTE_DSL_CACHE_DIR=/cache/cute
+    -e TILELANG_CACHE_DIR=/cache/tilelang
+    -e B12X_COMPILE_CACHE_DIR=/cache/b12x-compile
+    -e B12X_CUTE_CACHE_DIR=/cache/b12x-cute
+    -e VLLM_CACHE_ROOT=/cache/vllm-root
+    "$image"
+    -c "python3 /opt/tp3-kit/boot-gate-identity.py --profile speed && exec vllm serve $(printf '%q' "$MODEL_DIR")$(printf ' %q' "${serve_args[@]}")"
+  )
+}
+
+# Print a command without running it: one argument per line, then the same
+# command as one copy-pasteable line.
+print_cmd() {
+  local a
+  printf '# container command — one argument per line:\n'
+  printf 'docker\nrun\n'
+  for a in "$@"; do printf '%s\n' "$a"; done
+  printf '\n# copy-pasteable (PRINT_CMD runs nothing):\n'
+  printf 'docker run'
+  for a in "$@"; do printf ' %q' "$a"; done
+  printf '\n'
+}
+
+start() {
+  # PRINT_CMD=1 shows the container command and exits: no preflight, no
+  # container removal, no container, no GPU.
+  if [[ "${PRINT_CMD:-0}" == 1 ]]; then
+    build_run_args
+    print_cmd "${run_args[@]}"
+    return 0
+  fi
+  preflight
+  mkdir -p "$cache_root"/{vllm,flashinfer,triton,torch,nccl,karmic-cache}
+  build_run_args
   # Workers start first so the head never waits on a cold container (house pattern).
-  docker run -d --name "$container" \
-    --privileged --network host --ipc host \
-    --shm-size 64g --ulimit memlock=-1 --ulimit stack=67108864 \
-    --gpus all \
-    --restart no \
-    --entrypoint bash \
-    -v "$MODEL_DIR":"$MODEL_DIR":ro \
-    "${patch_mounts[@]}" \
-    -v "$cache_root/vllm":"/root/.cache/vllm" \
-    -v "$cache_root/flashinfer":"/root/.cache/flashinfer" \
-    -v "$cache_root/triton":"/root/.cache/triton" \
-    -v "$cache_root/torch":"/root/.cache/torch" \
-    -v "$cache_root/karmic-cache":"/cache" \
-    -e NCCL_IB_DISABLE="$NCCL_IB_DISABLE" \
-    -e NCCL_NET="$NCCL_NET" \
-    -e NCCL_NET_PLUGIN="$NCCL_NET_PLUGIN" \
-    -e NCCL_IB_HCA="$hca" \
-    -e NCCL_IB_GID_INDEX="$NCCL_IB_GID_INDEX" \
-    -e NCCL_IB_ADDR_FAMILY="$NCCL_IB_ADDR_FAMILY" \
-    -e NCCL_IB_ROCE_VERSION_NUM="$NCCL_IB_ROCE_VERSION_NUM" \
-    -e NCCL_IB_SUBNET_AWARE_ROUTING="$NCCL_IB_SUBNET_AWARE_ROUTING" \
-    -e NCCL_P2P_DISABLE="$NCCL_P2P_DISABLE" \
-    -e NCCL_NVLS_ENABLE="$NCCL_NVLS_ENABLE" \
-    -e NCCL_PROTO="$NCCL_PROTO" \
-    -e NCCL_BUFFSIZE="$NCCL_BUFFSIZE" \
-    -e NCCL_LL128_BUFFSIZE="$NCCL_LL128_BUFFSIZE" \
-    -e NCCL_MAX_NCHANNELS="$NCCL_MAX_NCHANNELS" \
-    -e NCCL_MIN_NCHANNELS="$NCCL_MIN_NCHANNELS" \
-    -e NCCL_DEBUG="${NCCL_DEBUG:-WARN}" \
-    -e NCCL_SOCKET_IFNAME="$mgmt_if" \
-    -e GLOO_SOCKET_IFNAME="$mgmt_if" \
-    -e TP_SOCKET_IFNAME="$mgmt_if" \
-    -e VLLM_HOST_IP="$host_ip" \
-    -e CUTE_DSL_ARCH="$CUTE_DSL_ARCH" \
-    -e VLLM_USE_AOT_COMPILE="$VLLM_USE_AOT_COMPILE" \
-    -e VLLM_USE_MEGA_AOT_ARTIFACT="$VLLM_USE_MEGA_AOT_ARTIFACT" \
-    -e VLLM_MEMORY_PROFILE_INCLUDE_ATTN="$VLLM_MEMORY_PROFILE_INCLUDE_ATTN" \
-    -e VLLM_USE_FLASHINFER_SAMPLER="$VLLM_USE_FLASHINFER_SAMPLER" \
-    -e VLLM_USE_V2_MODEL_RUNNER="$VLLM_USE_V2_MODEL_RUNNER" \
-    -e VLLM_USE_B12X_WO_PROJECTION="$VLLM_USE_B12X_WO_PROJECTION" \
-    -e VLLM_USE_B12X_MHC="$VLLM_USE_B12X_MHC" \
-    -e VLLM_USE_B12X_FP8_GEMM="$VLLM_USE_B12X_FP8_GEMM" \
-    -e VLLM_USE_B12X_MOE="$VLLM_USE_B12X_MOE" \
-    -e VLLM_USE_B12X_SPARSE_INDEXER="$VLLM_USE_B12X_SPARSE_INDEXER" \
-    -e B12X_MLA_SM120_UNIFIED="$B12X_MLA_SM120_UNIFIED" \
-    -e B12X_MOE_FORCE_A8="$B12X_MOE_FORCE_A8" \
-    -e B12X_W4A8_TINY_DECODE="$B12X_W4A8_TINY_DECODE" \
-    -e VLLM_MOE_SKIP_PADDING="$VLLM_MOE_SKIP_PADDING" \
-    -e VLLM_PLUGINS="$VLLM_PLUGINS" \
-    -e VLLM_ALLOW_LONG_MAX_MODEL_LEN="$VLLM_ALLOW_LONG_MAX_MODEL_LEN" \
-    -e VLLM_ENGINE_READY_TIMEOUT_S="$VLLM_ENGINE_READY_TIMEOUT_S" \
-    -e VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS="$VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS" \
-    -e VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS="$VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS" \
-    -e SAFETENSORS_FAST_GPU="$SAFETENSORS_FAST_GPU" \
-    -e OMP_NUM_THREADS="$OMP_NUM_THREADS" \
-    -e TORCH_NCCL_ASYNC_ERROR_HANDLING="$TORCH_NCCL_ASYNC_ERROR_HANDLING" \
-    -e CUDA_DEVICE_MAX_CONNECTIONS="$CUDA_DEVICE_MAX_CONNECTIONS" \
-    -e PYTORCH_CUDA_ALLOC_CONF="$PYTORCH_CUDA_ALLOC_CONF" \
-    -e TRITON_CACHE_DIR=/cache/triton \
-    -e TORCHINDUCTOR_CACHE_DIR=/cache/inductor \
-    -e CUTE_DSL_CACHE_DIR=/cache/cute \
-    -e TILELANG_CACHE_DIR=/cache/tilelang \
-    -e B12X_COMPILE_CACHE_DIR=/cache/b12x-compile \
-    -e B12X_CUTE_CACHE_DIR=/cache/b12x-cute \
-    -e VLLM_CACHE_ROOT=/cache/vllm-root \
-    "$image" \
-    -c "exec vllm serve $(printf '%q' "$MODEL_DIR")$(printf ' %q' "${serve_args[@]}")"
+  docker rm -f "$container" 2>/dev/null || true
+  docker run "${run_args[@]}"
   echo "started $container (rank $rank on $(hostname -s)); logs: docker logs -f $container"
 }
 
