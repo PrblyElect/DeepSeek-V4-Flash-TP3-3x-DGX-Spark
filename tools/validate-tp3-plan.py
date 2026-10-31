@@ -17,8 +17,10 @@ With no argument and no real vllm importable, prints usage and exits 2.
 form exercises the image's actual module.)
 """
 
+import argparse
 import importlib.util
 import math
+import os
 import sys
 import types
 from types import SimpleNamespace
@@ -110,17 +112,37 @@ def make_vllm_config(model_config, tp=TP, expert_parallel=False):
 
 
 def main():
-    if len(sys.argv) > 1:
-        path = sys.argv[1]
-    else:
+    parser = argparse.ArgumentParser(
+        prog="validate-tp3-plan.py",
+        description="Validate the chthonic fork's B12X virtual-TP plan for "
+                    "DeepSeek-V4-Flash at TP=3.",
+        epilog="With no argument inside the pinned image, the image's own "
+               "vllm.config.virtual_tp module is used.",
+    )
+    parser.add_argument(
+        "path", nargs="?",
+        help="path to the fork's virtual_tp.py (omit inside the pinned image)",
+    )
+    ns = parser.parse_args()
+
+    path = ns.path
+    if path is None:
         try:
             import vllm.config.virtual_tp  # noqa: F401
         except Exception:
-            print("usage: validate-tp3-plan.py <path-to-virtual_tp.py>")
-            print("       (or run with no args inside the pinned image — see the module docstring)")
+            parser.print_usage(sys.stderr)
+            print("error: no path given and vllm is not importable here", file=sys.stderr)
             return 2
         path = "vllm.config.virtual_tp"
-    vt = load_virtual_tp(path)
+    elif not os.path.isfile(path):
+        print(f"error: no such file: {path}", file=sys.stderr)
+        return 1
+
+    try:
+        vt = load_virtual_tp(path)
+    except Exception as exc:
+        print(f"error: could not load {path}: {exc}", file=sys.stderr)
+        return 1
     src = "real vllm import" if "virtual_tp_under_test" not in sys.modules else path
     print(f"virtual_tp under test: {src}\n")
 
@@ -144,14 +166,16 @@ def main():
         if axis.get("original_size") == axis.get("padded_size") and name != "vocab_size":
             pass  # no-op axes are legal
     text = mc.hf_text_config
+    heads = CHECKPOINT["num_attention_heads"]
+    groups = CHECKPOINT["o_groups"]
     checks = [
         ("num_attention_heads padded", text.num_attention_heads % TP, 0),
-        ("num_attention_heads recorded", getattr(text, "original_num_attention_heads", None), 64),
+        ("num_attention_heads recorded", getattr(text, "original_num_attention_heads", None), heads),
         ("moe_intermediate padded", text.moe_intermediate_size % TP, 0),
         ("o_groups padded", mc.hf_config.o_groups % TP, 0),
         ("heads-per-group preserved",
          text.num_attention_heads // mc.hf_config.o_groups,
-         64 // 8),
+         heads // groups),
     ]
     for label, got, want in checks:
         status = "ok" if got == want else "FAIL"
@@ -160,9 +184,12 @@ def main():
             failures.append(label)
 
     est = {
-        "attention FLOPs overhead": f"{(plan['attention_heads']['padded_size'] / 64 - 1) * 100:.1f}%",
-        "routed-expert params overhead": f"{(plan['moe_intermediate_size']['padded_size'] / 2048 - 1) * 100:.1f}%",
-        "vocab embed overhead": f"{(plan['vocab_size']['padded_size'] / 129280 - 1) * 100:.2f}%",
+        "attention FLOPs overhead":
+            f"{(plan['attention_heads']['padded_size'] / heads - 1) * 100:.1f}%",
+        "routed-expert params overhead":
+            f"{(plan['moe_intermediate_size']['padded_size'] / CHECKPOINT['moe_intermediate_size'] - 1) * 100:.1f}%",
+        "vocab embed overhead":
+            f"{(plan['vocab_size']['padded_size'] / CHECKPOINT['vocab_size'] - 1) * 100:.2f}%",
     }
     print("\nPadding overhead estimates:")
     for k, v in est.items():

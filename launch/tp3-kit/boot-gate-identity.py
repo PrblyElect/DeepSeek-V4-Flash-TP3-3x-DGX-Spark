@@ -71,15 +71,37 @@ def sha256_file(path: str) -> str | None:
         return None
 
 
-def package_version(name: str) -> str | None:
+def package_version(name: str, root: str | None = None) -> str | None:
+    """A distribution's version, resolved INSIDE `root` when one is given.
+
+    WHY NOT importlib.metadata.version(): that function searches the WHOLE
+    of sys.path, so a distribution installed anywhere else -- a stale
+    site-packages, a PYTHONPATH entry, another project's venv -- can
+    satisfy it. Putting the validated root on sys.path does NOT make the
+    stamp come from that tree; it only makes it the FIRST place searched.
+    A tree containing no vllm at all would still pass, off a copy from
+    somewhere else entirely. Resolving against `path=[root]` asks the
+    question this gate means to ask: what version is in THIS tree?
+
+    With no root given, fall back to the ordinary whole-sys.path lookup.
+    """
     try:
-        from importlib.metadata import PackageNotFoundError, version
+        from importlib.metadata import distributions, version
     except ImportError:  # pragma: no cover - python < 3.8
         return None
     try:
+        if root:
+            wanted = name.lower().replace("_", "-")
+            for dist in distributions(path=[root]):
+                try:
+                    raw = dist.metadata["Name"]
+                except Exception:
+                    raw = None
+                got = (raw or "").strip().lower().replace("_", "-")
+                if got == wanted:
+                    return dist.version
+            return None
         return version(name)
-    except PackageNotFoundError:
-        return None
     except Exception:
         return None
 
@@ -138,14 +160,13 @@ def main() -> int:
     print(f"  OK    site-packages root {dist_root}")
 
     # Read the build stamp from the SAME tree the file hashes come from.
-    # importlib.metadata searches sys.path, so putting the validated root
-    # on it makes the stamp provably come from the same site-packages the
-    # engine files are checked in — not from whatever environment the gate
-    # happens to run in.
+    # The stamp is resolved INSIDE the validated root (see package_version),
+    # not off sys.path: a version found anywhere else on sys.path would
+    # satisfy a tree that contains no such distribution at all.
     if dist_root not in sys.path:
         sys.path.insert(0, dist_root)
 
-    # ---- build stamp: the engine's own version, not a tag we hope is right
+    # ---- build stamp: the engine's own version, not a tag that merely looks right
     # The KEY of each entry is the DISTRIBUTION NAME: it is looked up with
     # importlib.metadata.version(). `make-engine-identity.py` writes it that
     # way, and the manifest template shows the same shape.
@@ -154,7 +175,7 @@ def main() -> int:
             unpinned.append(f"build stamp {pkg}")
             print(f"  NOT PINNED  build stamp {pkg}")
             continue
-        got = package_version(pkg)
+        got = package_version(pkg, root=dist_root)
         if got is None:
             failures.append(f"build stamp {pkg}: package not importable")
             print(f"  FAIL  build stamp {pkg} (package not installed)")
@@ -192,6 +213,21 @@ def main() -> int:
               "--profile %s --container <container> --write" % args.profile)
         if args.strict:
             failures.append(f"{len(unpinned)} claim(s) not pinned (--strict)")
+
+    # A manifest that pins NOTHING claims nothing. Under --strict that is a
+    # failure, not a pass: the gate would be reporting a green verdict about
+    # an engine it never looked at, which is the one verdict a strict
+    # adoption check must never give.
+    claim_count = (len(section.get("build_stamp") or {})
+                   + len(section.get("files") or {}))
+    if args.strict and claim_count == 0:
+        failures.append(
+            "the manifest pins NO claims at all (--strict): no build stamp and "
+            "no file digests, so this gate would certify an engine it never "
+            "looked at"
+        )
+        print("  FAIL  the manifest pins no claims at all — there is nothing "
+              "here to certify (--strict)")
 
     if failures:
         print("\n  failures:")

@@ -2,7 +2,7 @@
 
 Three files from the pinned image's own vLLM tree, each with a small
 `--- TP3-recipe patch` edit block (search that marker to read every change
-we made). The node helper bind-mounts them over the image's copies at
+made for this recipe). The node helper bind-mounts them over the image's copies at
 container start — no image rebuild, no source build on the Sparks. They are
 upstream Apache-2.0 files; keep their headers and re-diff against the image
 when you move to a newer nightly.

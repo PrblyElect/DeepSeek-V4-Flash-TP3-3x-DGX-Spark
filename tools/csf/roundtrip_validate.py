@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """Round-trip validation of a converted shard against its source shard:
 every compressed scale plane must decode bit-exact to the source scale
-bytes; every other tensor must pass through byte-identical."""
+bytes; every other tensor must pass through byte-identical.
+
+Fails loudly (exit 1) rather than via `assert`: `python3 -O` strips asserts,
+and a validation gate that silently disappears under an optimisation flag is
+not a gate. Also refuses a shard with no compressed scale planes — that case
+would otherwise print "0/0 FULLY VALIDATED" and validate nothing.
+"""
 import sys
 from pathlib import Path
 
@@ -13,6 +19,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from csf_codec import decode_plane
 
 GEOM = {"w1": (2048, 128), "w3": (2048, 128), "w2": (4096, 64)}
+
+
+def fail(msg):
+    print(f"CSF ROUND-TRIP FAIL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
 
 src_path, dst_path = sys.argv[1], sys.argv[2]
 src = safe_open(src_path, framework="pt", device="cpu")
@@ -27,25 +39,38 @@ print(f"source tensors: {len(sn)} | converted: {len(dn)}")
 print(f"dropped scales: {len(dropped)} | added csf tensors: {len(added)}")
 print(f"unexpected drops: {sorted(unexpected_drops)[:4]}")
 print(f"unexpected adds: {sorted(unexpected_adds)[:4]}")
-assert not unexpected_drops and not unexpected_adds
-assert len(added) == 2 * len(dropped)
+if unexpected_drops or unexpected_adds:
+    fail(f"unexpected tensor set change (drops={sorted(unexpected_drops)[:4]}, "
+         f"adds={sorted(unexpected_adds)[:4]})")
+if len(added) != 2 * len(dropped):
+    fail(f"expected 2 CSF tensors per dropped scale: {len(added)} added vs "
+         f"{len(dropped)} dropped")
+if not dropped:
+    fail("no compressed scale planes in this shard — nothing was validated; "
+         "a converted shard must carry at least one .scale plane")
 
 ok = 0
 n_exc = 0
 for k in sorted(dropped):
     proj = k[: -len(".scale")].rsplit(".", 1)[-1]
+    if proj not in GEOM:
+        fail(f"unknown projection '{proj}' for scale tensor {k}")
     rows, cols = GEOM[proj]
     fixed = dst.get_tensor(k + ".mxfp4_csf_fixed").numpy()
     exc = dst.get_tensor(k + ".mxfp4_csf_exceptions").numpy()
     n_exc += int(len(exc))
     plane = decode_plane(fixed, exc, rows, cols)
     src_scale = src.get_tensor(k).view(torch.uint8).numpy()
-    assert np.array_equal(plane, src_scale), f"round-trip mismatch: {k}"
+    if not np.array_equal(plane, src_scale):
+        fail(f"round-trip mismatch: {k}")
     ok += 1
 
 common = sn & dn
 same = sum(1 for k in common if torch.equal(src.get_tensor(k), dst.get_tensor(k)))
 print(f"round-trip: {ok}/{len(dropped)} scale planes BIT-EXACT (exceptions total: {n_exc})")
 print(f"pass-through: {same}/{len(common)} tensors byte-identical")
-assert ok == len(dropped) and same == len(common)
+if ok != len(dropped):
+    fail(f"only {ok}/{len(dropped)} scale planes decoded bit-exact")
+if same != len(common):
+    fail(f"only {same}/{len(common)} pass-through tensors are byte-identical")
 print("CONVERTED SHARD: FULLY VALIDATED")

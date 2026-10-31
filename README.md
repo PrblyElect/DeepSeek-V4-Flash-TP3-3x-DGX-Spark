@@ -40,7 +40,7 @@ names and port; you pick per deployment:**
   **~7.5–7.6M-token pool ≈ 7.2 simultaneous full-1M-context
   sessions** (at `MAX_NUM_BATCHED_TOKENS=4096`, see landmine 14) —
   the largest published pool for this model on any 2–3-Spark
-  deployment we're aware of. Its runtime dependencies (Ray, the pinned
+  deployment identified so far. Its runtime dependencies (Ray, the pinned
   b12x build) are installed from a local wheelhouse, prepared once per
   box — the boot itself still fetches nothing.
 - **CSF build (compressed-scales)** — the same speed-profile serving
@@ -57,7 +57,7 @@ names and port; you pick per deployment:**
   fixes applied it boots and serves, but at roughly half the beta
   build's spec throughput (rung 29); see the CSF section below.
 
-As far as we can find: the capacity profile is the first TP=3 serving of
+On the evidence gathered here: the capacity profile is the first TP=3 serving of
 this checkpoint at full native weight, and the speed profile the first
 DSpark-at-TP=3 serving of the 0731-lineage V4 checkpoint (the published
 TP=3 DSpark lanes run V4.1 — credited below). The machinery both profiles
@@ -156,8 +156,8 @@ Multi-*hour* soaks; the spec-decode + CUDA-graph corruption windows the
 community documented under sustained load ([eugr
 #363](https://github.com/eugr/spark-vllm-docker/issues/363) garble
 lineage; [#391](https://github.com/eugr/spark-vllm-docker/issues/391)
-reports a sparse-MLA Xid only after ~32 h on an older nightly) — our
-battery and 10-minute soak are clean, sustained windows are not proven;
+reports a sparse-MLA Xid only after ~32 h on an older nightly) — the
+battery and 10-minute soak here are clean, sustained windows are not proven;
 contexts above ~48K *exercised* on the speed profile / above 59K on
 capacity (1M is configured and pool-proven, not output-proven); any
 packaging except the native mixed FP4+FP8 (re-quants untested);
@@ -238,7 +238,7 @@ the spec-depth axis at {4, 5, 10}.
   does not fit 3× ~122 GiB without aggressive community re-quants whose
   quality is undocumented. Native 0731 now; V4.1 when a credible
   sub-300 GiB packaging exists.
-- **fp8 KV, not nvfp4 — now measured, not just cautious.** We A/B'd
+- **fp8 KV, not nvfp4 — now measured, not just cautious.** An A/B of
   `nvfp4_ds_mla` on this stack: the pool came out *smaller* than fp8
   (this image's V4.0 record path is fatter per token; the lean 416-byte
   writer lives in another lineage) with speed identical — and the
@@ -253,8 +253,8 @@ the spec-depth axis at {4, 5, 10}.
   1,028,621-token accepted prompt with needle retrieval) — pick your
   weights with your eyes open, both ways.
 - **Sampling**: the official model card recommends temperature 1.0 /
-  top_p 1.0 for the stock checkpoint. On the abliterated build we
-  measured stray CJK leakage at temp 1.0, so our clients pin
+  top_p 1.0 for the stock checkpoint. On the abliterated build, stray CJK
+  leakage was measured at temp 1.0, so this recipe's clients pin
   temperature ≤ 0.7 / top_p 0.95 (0.6/0.95 is the sweet spot for
   thinking-mode work). If you serve stock weights, try the official
   setting first; on this build, don't. No repetition/frequency/presence
@@ -309,8 +309,8 @@ tool calls work through the `deepseek_v4` parser with
 - **Concurrency**: 1–4 interactive streams sit in the 80 tok/s class;
   8-way aggregate is ~140–155 tok/s. On capacity, 16-way aggregate is
   ~150 tok/s with full-1M headroom per stream.
-- **Exercise your real context length before trusting it.** We validated
-  retrieval at ~21–22K (speed) and 59K (capacity); 1M is configured and
+- **Exercise your real context length before trusting it.** Retrieval was
+  validated at ~21–22K (speed) and 59K (capacity); 1M is configured and
   the pool math holds, but output quality at 1M is unproven here.
 
 ## vs. two Sparks (TP=2) and other TP=3 lanes — honest scoreboard
@@ -320,22 +320,22 @@ tool calls work through the `deepseek_v4` parser with
   current head): 2.79M-token pool at gmu 0.85 (2.04M at the June
   checkpoint), 84.3 tok/s peak / 80.1 count-benchmark / 67.6 mean, ~182
   tok/s at 6-way, TTFT 4.1 s @8K → 29.5 s @100K (1.5–2.6K tok/s
-  prefill). Our speed profile: **count/code-class decode parity-plus
+  prefill). The speed profile: **count/code-class decode parity-plus
   (~100–108), pool parity in its capture-48 variant (~2.7–2.8M at fp8
   KV vs their nvfp4)**, and half the boxes' worth of prefill still
   ahead (1.0–1.06K vs 1.5–2.6K). Their lane also carries the
-  garble-fallback note that motivated our fp8-KV choice.
+  garble-fallback note that motivated the fp8-KV choice here.
 - **Best published 3-Spark pool/throughput** ([christopher_owen's DS4.1
   native TP=3](https://forums.developer.nvidia.com/t/new-deepseek-4-1-flash-recipe/384438),
   final r5o): 2,845,543 tokens at 512K ctx (5.4 full windows), 64.8
   tok/s code / 78.5 JSON single-stream, 171–196 @ 8-way, prefill flat
-  ~3.8K tok/s to 183K. Our speed profile: **faster single-stream decode
+  ~3.8K tok/s to 183K. The speed profile: **faster single-stream decode
   on draftable streams (~100–108 vs 64.8–78.5), 16-way aggregate in the
   same class (~170 vs 171–196)**, pool ~2.3–2.6M @ 1M ctx (his 2.85M @
-  512K — our capture-48 variant matches it at 2× the context setting),
+  512K — the capture-48 variant matches it at 2× the context setting),
   and **~4× slower prefill** — his lane runs sequence-parallel prefill
-  patches and UVM driver-level memory work we deliberately don't
-  (outside NVIDIA's validated config). Our capacity profile:
+  patches and UVM driver-level memory work deliberately left out here
+  (outside NVIDIA's validated config). The capacity profile:
   **~2.6× his pool** at well under half the per-stream speed.
 - **Lossy-quant TP=3** ([EXL3 3.5bpw](https://github.com/tonyd2wild/DeepSeek-V4.1-Flash-vLLM-DGX-Spark/blob/main/docs/EXL3-TP3.md)):
   51.5 tok/s — a different weight class, see "Full quality, deliberately".
@@ -349,7 +349,7 @@ with 16-way headroom** (speed profile), **~2.7–2.8M fp8-KV tokens at 1M
 context when you trade the 16-way ceiling back for pool** (capture-48
 variant), or **~7.5M tokens / ~7.2 full-1M sessions** at well under half
 the speed (capacity). Prefill is where the frontier still is — nobody's 3-box
-prefill matches the best patched lanes, and neither does ours.
+prefill matches the best patched lanes, and neither does this profile.
 
 ## Hardware / network this was proven on
 
@@ -360,7 +360,7 @@ prefill matches the best patched lanes, and neither does ours.
 - Management LAN for engine bootstrap (OOB), NCCL pinned to both
   on-board HCAs per rank (`rocep1s0f0,rocep1s0f1`); the twin-RoCE
   interface trick (`roceP2p1s0f*` alongside `rocep1s0f*`) is a community
-  fabric lever we have not A/B'd — see roadmap.
+  fabric lever not A/B'd here — see roadmap.
 
 ## Stack (pinned, per profile)
 
@@ -455,9 +455,8 @@ from inside the container, before the engine starts:
 
 - `engine-identity.json` — the manifest: a build stamp (the engine's own
   package version) and the sha256 of the engine-critical files.
-- `boot-gate-identity.py` — the in-container gate. It is the first step
-  of the container command, so a mismatched engine fails the boot instead
-  of answering requests.
+- `boot-gate-identity.py` — the in-container gate. It runs before the engine
+  starts, so a mismatched engine fails the boot instead of answering requests.
 - `make-engine-identity.py` — the generator that fills the manifest from
   a container that is already up.
 
@@ -692,8 +691,9 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
 - `config/cluster.env.capacity` — capacity profile
 - `patches-karmic/` — the TP=3 padding patches for the speed image
   (upstream Apache-2.0 files with marked edit blocks; see its README)
-- `patches-csf/` — the CSF serving path: the pad-aware PR-973 loader
-  with marked TP=3 edit blocks, the b12x compile wait-race fix
+- `patches-csf/` — the CSF serving path: the pad-aware loader from
+  PR #973 in the `local-inference-lab/vllm` fork, with marked TP=3 edit
+  blocks, the b12x compile wait-race fix
   write-up, geometry guidance, and the twelve-file `vllm-overlay/` a
   CSF boot mounts (see its README)
 - `tools/csf/` — the offline CSF converter toolchain (codec, converter,
@@ -767,9 +767,9 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
 - **tonyd2wild** — the `nccl230u1` image, the MiniMax-M3 TP=3 recipe the
   capacity profile inherits its Ray/NCCL/OOM fixes from, the [2-Spark
   DSpark/NVFP4-KV recipe](https://github.com/tonyd2wild/DeepSeek-v4-Flash-Vision-Exp-DSpark-1M-NVFP4-KV-2x-DGX-Spark)
-  we benchmark against (and whose k≤5-or-multiple rule and
-  capture-size = seqs×(k+1) sizing we follow), and the first DS4.1-Flash
-  TP=3 lanes (native and
+  used as the benchmark baseline (and whose k≤5-or-multiple rule and
+  capture-size = seqs×(k+1) sizing this recipe follows), and the first
+  DS4.1-Flash TP=3 lanes (native and
   [EXL3](https://github.com/tonyd2wild/DeepSeek-V4.1-Flash-vLLM-DGX-Spark/blob/main/docs/EXL3-TP3.md)).
 - **eugr** — [spark-vllm-docker](https://github.com/eugr/spark-vllm-docker)
   (the ARM64 image builder + changelog behind the speed profile's
@@ -778,15 +778,15 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
   numbers](https://forums.developer.nvidia.com/t/new-deepseek-4-1-flash-recipe/384438)
   and the NCCL ring conventions the speed profile's fabric pins follow.
 - **jasl** — DS4 SM12x vLLM support (PR #41834), TP=4 mechanics.
-- **provos** — the MTP+CUDA-graph corruption write-up behind our
-  battery-before-trust stance on spec decode.
+- **provos** — the MTP+CUDA-graph corruption write-up behind this
+  recipe's battery-before-trust stance on spec decode.
 - **MiaAI-Lab** — DS4-on-Spark bug documentation, the original 2-Spark
   1M-context recipe line, and the 4-box SGLang reference numbers.
 - A companion Vision-Exp TP=3 recipe (same authors) — native vision at
   TP=3, the SP-prefill port, and the scheduler fairness patches (decode
   deferral cadence + interactive admission) live there.
 
-Ours: the 0731/V4.0 TP=3 port itself — the three ladders in
+Contained here: the 0731/V4.0 TP=3 port itself — the three ladders in
 `docs/FIXLOG.md` (29 rungs), the `patches-karmic/` set (V4→V4.1 pad delegation,
 64-aligned MoE pad, the `DSparkDraftModel` gate, `allow_tp_padding`
 marking), the wrong-default-model trap, the MHC dynamo wall + tilelang

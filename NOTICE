@@ -25,7 +25,7 @@ engine's `vllm/model_executor/kernels/mhc/tilelang.py` as it stood
 op". The file is bind-mounted over the image's own copy at boot, so a
 capacity boot runs the older routing whether or not the image carries the
 newer one. The TP=3 edits on top of that base are marked; the rollback to
-the older base is not an edit of ours and is not marked as one.
+the older base is not an edit made for this recipe and is not marked as one.
 
 The MIT license in `LICENSE` covers the original scripts and
 documentation in this repository, and does not extend to those upstream

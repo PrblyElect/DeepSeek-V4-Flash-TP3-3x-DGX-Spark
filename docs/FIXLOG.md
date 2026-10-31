@@ -148,7 +148,7 @@ the mp executor replaced Ray with a different failure grammar.
   garble after long contexts ([eugr
   #363](https://github.com/eugr/spark-vllm-docker/issues/363)) and a
   sparse-MLA Xid only after ~32 h on an older nightly ([eugr
-  #391](https://github.com/eugr/spark-vllm-docker/issues/391)). Our
+  #391](https://github.com/eugr/spark-vllm-docker/issues/391)). The
   battery + 10-min soak are clean; run a multi-hour soak before trusting
   any lane of this class for unattended work.
 
@@ -200,8 +200,9 @@ shards (~1:50 for 50 shards/rank) → profile run in eager → KV pool →
 ## The third ladder: the CSF (compressed-scales) campaign (rungs 24–29)
 
 Serving the checkpoint in the CSF compressed-scales format (public
-PR #973 loader lineage) at TP=3, then racing it against the fp8 speed
-profile. Toolchain and loader edits: `patches-csf/`, `tools/csf/`.
+`local-inference-lab/vllm` PR #973 loader lineage) at TP=3, then racing it
+against the fp8 speed profile. Toolchain and loader edits: `patches-csf/`,
+`tools/csf/`.
 
 | # | Symptom / goal | Root cause / finding | Fix / outcome |
 |---|---|---|---|
