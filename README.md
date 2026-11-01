@@ -7,6 +7,7 @@ tags:
 - vllm
 - dgx-spark
 - tensor-parallel
+- speculative-decoding
 ---
 
 # DeepSeek-V4-Flash at TP=3 across 3× NVIDIA DGX Spark — speed & capacity
