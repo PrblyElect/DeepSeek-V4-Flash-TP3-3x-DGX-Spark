@@ -79,14 +79,57 @@ re-runnable at any time:
 docker exec ds4flash-tp3-head python3 /opt/tp3-kit/boot-gate-identity.py --profile speed
 # expected: ENGINE-IDENTITY PASS
 
-# with the manifest filled in, --strict also fails on an unpinned claim
+# --strict fails on a claim that is not pinned
 docker exec ds4flash-tp3-head python3 /opt/tp3-kit/boot-gate-identity.py --profile speed --strict
 ```
 
-The shipped manifest is a template, so the default run reports
-`NOT PINNED` per claim and still passes. Filling it in (see the
-README's "Proving which engine answered") turns this into the adoption
-gate: a re-pinned image fails it until it is re-audited.
+### What it checks
+
+Each claim is checked where it lives, inside the container:
+
+- **the build stamp** — the engine's own distribution version, resolved in
+  that profile's site-packages root and nowhere else, so a copy of vllm
+  from another tree cannot satisfy it.
+- **every engine file** — the sha256 of the file as it is on disk at that
+  moment, including the bind-mounted TP=3 patches: a patch is part of the
+  claim, not a gap in it.
+
+A pinned claim that does not match is a FAIL, and the boot stops there: a
+mismatched engine never gets to answer a request.
+
+### What it reports when the manifest is not filled
+
+A claim whose value is still a `<FILL-IN: …>` marker is reported
+`NOT PINNED`. The default run reports it and still passes, so a fresh
+clone boots; `--strict` turns every unpinned claim into a failure, so a
+strict run can never pass on a manifest that pins nothing. An engine-file
+claim whose value is not a full lowercase sha256 is a **FAIL** rather than
+a `NOT PINNED`, and a build stamp is pinned by holding a concrete version
+string — the two build stamps are reported `OK`.
+
+**A default `ENGINE-IDENTITY PASS` is not a verification.** Read the count
+in parentheses on the PASS line: `ENGINE-IDENTITY PASS (8 claim(s) still not pinned)`
+means the gate proved 4 of the speed profile's 12 claims and could not
+prove the other 8. The shipped manifest pins 6 of the 19 claims across
+both profiles — the two build stamps and the four bind-mounted patch
+digests. The thirteen image-baked file digests are left unfilled, because
+their bytes live inside the image and an invented digest is worse than no
+digest.
+
+### Filling it in
+
+Against a container that is already up, on the box that owns it — one
+command, `--profile capacity` for the other lineage:
+
+```sh
+python3 launch/tp3-kit/make-engine-identity.py --profile speed --container ds4flash-tp3-head --write
+```
+
+Then re-stage the kit so the boxes carry the filled manifest
+(`./launch/ds4flash-tp3-up stage-env`) and run the gate again. The
+generator reports every claim whose bytes in the container DIFFER from the
+value the manifest already pinned — that is the re-pin signal, and it is
+worth reading before accepting it over a pinned claim.
 
 ## 4. The container command, without starting it
 

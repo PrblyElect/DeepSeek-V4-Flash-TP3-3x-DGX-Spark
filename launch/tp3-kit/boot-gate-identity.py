@@ -11,15 +11,18 @@ claim about the BYTES that run, not about a tag.
 This gate makes that claim, from inside the container, before the engine
 starts:
 
-  * build stamp  — the engine's own package version (a commit id, not a tag)
+  * build stamp  — the engine's own distribution version (the commit id, plus
+    a nightly's packaging date), resolved in that profile's site-packages root
   * file hashes  — sha256 of the engine-critical files, AS THEY ARE in this
     container (so a mounted patch changes the hash, which is the point)
 
-The shipped manifest (engine-identity.json) is a TEMPLATE: the hashes are
-NOT filled in, because they cannot be computed without an image. The gate
-therefore reports NOT PINNED and passes, so a fresh clone boots. Fill the
-manifest in (see make-engine-identity.py) and the gate becomes a real
-adoption gate: a re-pinned image fails it until it is re-audited.
+The shipped manifest (engine-identity.json) is PARTLY FILLED: both build
+stamps and the digests of the bind-mounted patch files this recipe ships
+are pinned; the image-baked file digests are NOT, because they cannot be
+computed without an image. The gate therefore reports NOT PINNED for those
+and passes, so a fresh clone boots. Fill the manifest in (see
+make-engine-identity.py) and the gate becomes a real adoption gate: a
+re-pinned image fails it until it is re-audited.
 
 Exit codes: 0 = gate passed, 1 = gate failed, 2 = usage error.
 """
@@ -124,7 +127,7 @@ def main() -> int:
     ap.add_argument("--dist-root", default=None,
                     help="override the site-packages root the paths resolve in")
     ap.add_argument("--strict", action="store_true",
-                    help="treat an unfilled (template) manifest as a failure")
+                    help="treat an unpinned claim as a failure")
     args = ap.parse_args()
 
     failures: list[str] = []
@@ -169,7 +172,7 @@ def main() -> int:
     # ---- build stamp: the engine's own version, not a tag that merely looks right
     # The KEY of each entry is the DISTRIBUTION NAME: it is looked up with
     # importlib.metadata.version(). `make-engine-identity.py` writes it that
-    # way, and the manifest template shows the same shape.
+    # way, and the manifest shows the same shape.
     for pkg, expected in (section.get("build_stamp") or {}).items():
         if is_placeholder(expected):
             unpinned.append(f"build stamp {pkg}")

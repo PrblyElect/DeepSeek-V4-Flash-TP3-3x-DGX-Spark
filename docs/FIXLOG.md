@@ -207,7 +207,7 @@ against the fp8 speed profile. Toolchain and loader edits: `patches-csf/`,
 | # | Symptom / goal | Root cause / finding | Fix / outcome |
 |---|---|---|---|
 | 24 | convert a native checkpoint to CSF offline | the plane codec (row base = max-pair-coverage, offset-1 u24 exceptions) had to be re-derived from the loader's own decode | `tools/csf/` codec + converter; round-trip validated (decode→re-encode reproduces published bytes; pass-through tensors byte-identical) |
-| 25 | the PR-973 loader rejects the TP=3 virtual pad (moe intermediate 2048→2112) | it validates exact family geometry, and the pad machinery raises the config's intermediate | marked `TP3-recipe patch` blocks in `patches-csf/mxfp4_csf_loader.py`: accept the small rank-aligned pad when real geometry matches, slice real, zero-fill phantom rows/columns, remap exceptions, admit the padded TP size |
+| 25 | the `local-inference-lab/vllm` PR-973 loader rejects the TP=3 virtual pad (moe intermediate 2048→2112) | it validates exact family geometry, and the pad machinery raises the config's intermediate | marked `TP3-recipe patch` blocks in `patches-csf/mxfp4_csf_loader.py`: accept the small rank-aligned pad when real geometry matches, slice real, zero-fill phantom rows/columns, remap exceptions, admit the padded TP size |
 | 26 | at the 2112 pad, boots die in weight prep on the compact_micro n64 path ("unplanned CuTe program" under no-compilation); at 2304 they boot | b12x's obligation ready-path adopts a stale program record instead of re-deriving declared coverage, so the compact kernel lazily compiles where compilation is forbidden | three-line fix intent in `patches-csf/README.md` (re-derive via `_compile(required=True)`, union after — it overwrites the dict — then `_wait_programs`). Not env-fixable. 2304 = unpatched fallback |
 | 27 | which base is faster at identical speed settings? | same-day paired A/B, single-variable base swap (k=5, gmu 0.79, cap 144): CSF/2112 measured ~5–10% faster single-stream prose decode (+10% in the paired A/B, whose fp8 control sat at the bottom of its historical band), code-class top-of-band, pool parity-plus (~2.4M), prefill top-of-band; battery clean, cross-base diffs rephrase-class only, ~370K-token cold prefill coherent | **CSF/2112 adopted as the fastest measured configuration** — pending the rung-26 runtime release (rung 24's converter works today). Capacity-style CSF variant (no spec) reaches ~3.6–4.0M pool at 8192, ~5.6–5.8M at 4096 |
 | 28 | would a shorter draft (k=4) trade unused positions for step time? | +~5% prose (under the adoption bar) but −11% code/count class, non-overlapping: acceptance histograms show code-class content accepts deep, and k=4 amputates exactly those positions | k=5 stays; the spec-depth axis is closed {4, 5, 10} for mixed workloads |
@@ -252,6 +252,41 @@ a different kind — they were not crashes but claims that did not hold.
 - **the shard count was given as "the official repo", which named
   nothing** — and the three candidate repositories do not agree. The
   count is now given per repository.
+- **the identity manifest shipped a gate that could not fail.** All
+  nineteen of its claims were `<FILL-IN: ...>` markers, so every run
+  reported `NOT PINNED` for everything: the default run passed on a
+  manifest that pinned nothing, and its claims about the engine were
+  worth nothing. What can be pinned without an image is pinned now —
+  both build stamps, and the sha256 of the four patch files this
+  repository itself ships (`patches-karmic/config.py`,
+  `patches-karmic/v4-attention.py`, `patches-karmic/v4-model.py` and
+  `patches/tilelang.py` — the bytes the bind-mounts put on the engine
+  paths). The thirteen image-baked file digests stay unfilled: their
+  bytes live inside the image, and an invented digest is worse than no
+  digest. Six of nineteen claims are pinned; the gate now proves those
+  six and says `NOT PINNED` about the rest.
+- **the build stamp is a distribution version, and the short form is not
+  it.** The stack table published `0.1.dev21553+gab86b7073` and
+  `0.11.2.dev279+chthonic`; the strings the pinned images report are
+  `0.1.dev21553+gab86b7073.d20261004` and
+  `0.11.2.dev279+chthonic.consecration.b12x.cu132` — the commit id plus
+  the nightly's packaging date, and the fork's build markers. The gate
+  compares that string exactly, so pinning the short form would have
+  failed the gate on the very image the recipe pins. The stack table
+  publishes the distribution version now.
+- **the generator could overwrite a pinned claim silently.** It now
+  reports every claim whose bytes in the container differ from the value
+  the manifest already pinned — that is the re-pin signal — and the
+  manifest's `status` line is computed from the claims themselves
+  instead of being asserted. Reporting alone was not enough, though: a
+  generator that overwrites the pin and exits 0 can launder a drifted
+  engine into a passing `--strict` gate, and a scripted
+  generate-then-verify cannot read stdout. So the generator now **keeps
+  the pinned value** and exits **3** when a claim has drifted, and exits
+  **4** when a claim that was pinned is downgraded to a marker; taking
+  the container's bytes over a pin is a deliberate act that requires
+  `--accept-drift`. A pinned claim that has gone missing is also kept,
+  so it cannot be silently un-pinned.
 
 ## After the ladders: the boot path changed
 
@@ -269,5 +304,7 @@ current boot path is:
   b12x commit is unchanged — only the timing moved.
 - **the engine is now identified, not assumed**: the container command
   starts with the engine-identity gate (`launch/tp3-kit/`), so the files
-  that answer are the ones a reader can check. The shipped manifest is a
-  template until a reader fills it in.
+  that answer are the ones a reader can check. The shipped manifest is
+  pinned in part — both build stamps and the four bind-mounted patch
+  digests — and a reader fills the image-baked file digests in against
+  a live container.

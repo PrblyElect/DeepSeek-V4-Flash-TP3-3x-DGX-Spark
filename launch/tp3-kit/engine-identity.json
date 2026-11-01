@@ -1,20 +1,20 @@
 {
   "schema": 1,
-  "status": "TEMPLATE — no claim in this file is pinned yet",
-  "why": "A digest-pinned image says which manifest was pulled. It does not say which BYTES ran: the recipe bind-mounts patched engine files over the image's own, and the capacity profile installs a pinned b12x build on top of the baked one. The build stamp and the engine-critical file hashes say that. This manifest ships UNFILLED on purpose: the hashes cannot be computed without an image, and an invented digest is worse than no digest. Fill it in with make-engine-identity.py (one command, against a container that is already up) and the boot gate becomes a real adoption gate: a re-pinned image fails it until it is re-audited.",
-  "how_to_fill": "python3 launch/tp3-kit/make-engine-identity.py --profile speed --container ds4flash-tp3-head --write   (run on the box that owns the container, then re-stage the kit)",
-  "not_pinned_marker": "any value that is not a 64-character lowercase sha256 digest is treated as NOT PINNED: the gate reports it and passes, so a fresh clone boots",
+  "status": "PARTIALLY PINNED — 6/19 claims (capacity 2/7, speed 4/12) — filled by make-engine-identity.py; re-audit on every re-pin",
+  "why": "A digest-pinned image says which manifest was pulled. It does not say which BYTES ran: the recipe bind-mounts patched engine files over the image's own, and the capacity profile installs a pinned b12x build on top of the baked one. The build stamp and the engine-critical file hashes say that. This manifest ships PARTLY FILLED on purpose: what can be computed without an image is computed here (the build stamps, and the digests of the patch files this repository itself ships), and what cannot — the image-baked engine files — is left as a <FILL-IN: ...> marker, because an invented digest is worse than no digest. Fill the rest with make-engine-identity.py (one command, against a container that is already up) and the boot gate becomes a real adoption gate: a re-pinned image fails it until it is re-audited. A pinned digest carries no inline description, so files_why gives its provenance; an unfilled claim keeps its description in the marker itself.",
+  "how_to_fill": "python3 launch/tp3-kit/make-engine-identity.py --profile speed --container ds4flash-tp3-head --write   (run on the box that owns the container, then re-stage the kit; --profile capacity for the capacity profile)",
+  "not_pinned_marker": "any value that is not a 64-character lowercase sha256 digest is treated as NOT PINNED: the gate reports it per claim and the default run passes, so a fresh clone boots. --strict turns every unpinned claim into a FAIL, so a strict run can never pass on a manifest that pins nothing.",
   "profiles": {
     "speed": {
-      "note": "the karmic-lineage speed image. Its published vllm version string is 0.1.dev21553+gab86b7073 (see the README stack table); make-engine-identity.py records what your container actually reports.",
+      "note": "the karmic-lineage speed image. The DISTRIBUTION version the container reports is the commit id plus the nightly's packaging date — 0.1.dev21553+gab86b7073.d20261004 — and the gate compares the distribution version exactly, so that is what is pinned here; the README stack table publishes the same string. make-engine-identity.py records what your container actually reports.",
       "dist_root": "/usr/local/lib/python3.12/dist-packages",
       "build_stamp": {
-        "vllm": "<FILL-IN: the vllm version reported inside the pinned image>"
+        "vllm": "0.1.dev21553+gab86b7073.d20261004"
       },
       "files": {
-        "vllm/models/deepseek_v4/attention.py": "<FILL-IN: sha256 — bind-mounted TP3 patch>",
-        "vllm/models/deepseek_v4/nvidia/model.py": "<FILL-IN: sha256 — bind-mounted TP3 patch>",
-        "vllm/model_executor/models/config.py": "<FILL-IN: sha256 — bind-mounted TP3 patch>",
+        "vllm/models/deepseek_v4/attention.py": "6dd67cab219e951b800af99cc65d669a5610f00e3375f8a09f750e4f8c71006f",
+        "vllm/models/deepseek_v4/nvidia/model.py": "cf4329d52a78455464d56362be2a719962383cb4f6b28a3059d0d2685ba5c780",
+        "vllm/model_executor/models/config.py": "035ae2493349ddb88128ec67f51a478c0fe06e2e2e0b191e9d1019a640d61db8",
         "vllm/models/deepseek_v4/sparse_mla.py": "<FILL-IN: sha256 — the DS-V4 sparse-MLA backend (its kernel block size is 256)>",
         "vllm/models/deepseek_v4/nvidia/b12x.py": "<FILL-IN: sha256 — the B12X attention backend this profile selects>",
         "vllm/v1/attention/backends/mla/sparse_swa.py": "<FILL-IN: sha256 — the sparse-SWA backend (preferred block size 256)>",
@@ -23,21 +23,29 @@
         "vllm/v1/worker/gpu_model_runner.py": "<FILL-IN: sha256 — the older model runner (V1), the one upstream issue 53051 is filed against>",
         "vllm/config/vllm.py": "<FILL-IN: sha256 — the engine config (uniform_decode_query_len lives here)>",
         "vllm/platforms/interface.py": "<FILL-IN: sha256 — the platform policy that derives the KV block size>"
+      },
+      "files_why": {
+        "vllm/models/deepseek_v4/attention.py": "bind-mounted TP3 patch — the bytes are this repository's own patches-karmic/v4-attention.py, mounted over the image's copy by launch/ds4flash-tp3-karmic-spark. The digest is of the shipped file, so it is computable without an image.",
+        "vllm/models/deepseek_v4/nvidia/model.py": "bind-mounted TP3 patch — this repository's own patches-karmic/v4-model.py, mounted over the image's copy by launch/ds4flash-tp3-karmic-spark.",
+        "vllm/model_executor/models/config.py": "bind-mounted TP3 patch — this repository's own patches-karmic/config.py, mounted over the image's copy by launch/ds4flash-tp3-karmic-spark."
       }
     },
     "capacity": {
-      "note": "the chthonic-lineage capacity image (no speculative decode, Ray executor).",
+      "note": "the chthonic-lineage capacity image (no speculative decode, Ray executor). Its published vllm version string is 0.11.2.dev279+chthonic (see the README stack table); the DISTRIBUTION version the container reports is 0.11.2.dev279+chthonic.consecration.b12x.cu132, and that is what is pinned here. make-engine-identity.py records what your container actually reports.",
       "dist_root": "/opt/venv/lib/python3.12/site-packages",
       "build_stamp": {
-        "vllm": "<FILL-IN: the vllm version reported inside the pinned image>"
+        "vllm": "0.11.2.dev279+chthonic.consecration.b12x.cu132"
       },
       "files": {
-        "vllm/model_executor/kernels/mhc/tilelang.py": "<FILL-IN: sha256 — bind-mounted dynamo-safe probe; based on the engine file as it stood BEFORE the upstream 'Route DeepSeek hc head through TileLang op' commit, so a capacity boot runs the older routing — see NOTICE>",
+        "vllm/model_executor/kernels/mhc/tilelang.py": "48d31857499254a1408a5316dac5ea2bb2d6cf824b4c2a579f1e7ac9a512e823",
         "vllm/models/deepseek_v4/sparse_mla.py": "<FILL-IN: sha256 — the DS-V4 sparse-MLA backend (its kernel block size is 256)>",
         "vllm/models/deepseek_v4/nvidia/b12x.py": "<FILL-IN: sha256 — the B12X attention backend this profile selects>",
         "vllm/v1/attention/backends/mla/b12x_mla_sparse.py": "<FILL-IN: sha256 — the B12X_MLA_SPARSE backend>",
         "vllm/v1/attention/backends/mla/sparse_swa.py": "<FILL-IN: sha256 — the sparse-SWA backend>",
         "vllm/v1/worker/gpu_model_runner.py": "<FILL-IN: sha256 — the model runner this lineage uses>"
+      },
+      "files_why": {
+        "vllm/model_executor/kernels/mhc/tilelang.py": "bind-mounted dynamo-safe probe — the bytes are this repository's own patches/tilelang.py, mounted over the image's copy by launch/ds4flash-tp3-spark. It is based on the engine file as it stood BEFORE the upstream 'Route DeepSeek hc head through TileLang op' commit, so a capacity boot runs the older routing — see NOTICE. The capacity profile mounts it whenever it has been staged; a container holding the image's own copy instead is a DIFFERENT routing than the recipe audited, and this digest is what makes that visible."
       }
     }
   }

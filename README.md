@@ -162,7 +162,12 @@ battery and 10-minute soak here are clean, sustained windows are not proven;
 contexts above ~48K *exercised* on the speed profile / above 59K on
 capacity (1M is configured and pool-proven, not output-proven); any
 packaging except the native mixed FP4+FP8 (re-quants untested);
-nvfp4 KV (deliberate — see "Full quality").
+nvfp4 KV (deliberate — see "Full quality"); the thirteen image-baked
+engine-file digests in `launch/tp3-kit/engine-identity.json`, which the
+manifest ships unfilled — the gate checks the build stamp and the four
+bind-mounted patch digests and reports the rest as `NOT PINNED` until a
+reader fills them against a live container (see "Proving which engine
+answered").
 
 ## The CSF build (fastest measured; one upstream release away)
 
@@ -368,7 +373,7 @@ prefill matches the best patched lanes, and neither does this profile.
 | Component | Speed (default) | Capacity |
 |---|---|---|
 | Container | `eugr/spark-vllm-b12x:nightly-20261004` @ `sha256:66147fc1420dbd59a7bb1411697d81a8231c298105b61c5962179cd146b4a41b` | `ghcr.io/tonyd2wild/vllm-m3-chthonic:nccl230u1` @ `sha256:cdeae56d23d0d3f35a21c67c9f3e47979725a1ef9cd65faa6134b91871497be2` |
-| vLLM fork | karmic-kraken lineage (0.1.dev21553+gab86b7073), baked | `local-inference-lab/vllm` `dev/chthonic-consecration` (0.11.2.dev279+chthonic), baked |
+| vLLM fork | karmic-kraken lineage, baked — distribution version `0.1.dev21553+gab86b7073.d20261004` (the commit `gab86b7073` plus the nightly's packaging date) | `local-inference-lab/vllm` `dev/chthonic-consecration`, baked — distribution version `0.11.2.dev279+chthonic.consecration.b12x.cu132` |
 | b12x kernels | 1.5.0 baked | pinned commit `08e980c303b0b6291700a6b85aa09aa874fc27cb`, installed from the offline wheelhouse (pre-flight, no boot-time fetch; baked 0.20.0 is API-older) |
 | NCCL | 2.32.x baked (no shims to fight) | 2.30.7 (image-built for sm_121; the boot banner must say 2.30.7, never the baked 2.30.4 shim) |
 | Executor | `mp` (`--nnodes 3 --node-rank`), no Ray | Ray 2.55.1 + V2 executor, plasma store capped 1 GiB/node |
@@ -461,17 +466,45 @@ from inside the container, before the engine starts:
 - `make-engine-identity.py` — the generator that fills the manifest from
   a container that is already up.
 
-**What is filled in by default: nothing.** The shipped manifest is a
-TEMPLATE. The hashes cannot be computed without an image, and an
-invented digest would be worse than no digest — so every claim in the
-shipped file is a clearly-marked placeholder, and the gate reports
-`NOT PINNED` for each of them and passes, so a fresh clone boots. Fill
-the manifest in and the gate becomes a real adoption gate:
+**What is filled in by default: 6 of the 19 claims.** The manifest ships
+PARTLY FILLED, because a claim can only be pinned truthfully if its bytes
+are knowable without an image:
+
+- both **build stamps** are pinned — the distribution version string the
+  pinned image reports (`0.1.dev21553+gab86b7073.d20261004` for the speed
+  image, `0.11.2.dev279+chthonic.consecration.b12x.cu132` for the capacity
+  one). It is the *distribution* version, not the commit string: a nightly's
+  version carries its packaging date as well as its commit id, and the gate
+  compares the string exactly.
+- the **four bind-mounted patch digests** are pinned — those bytes ship in
+  this repository, so their sha256 is computable at the desk:
+  `patches-karmic/config.py`, `patches-karmic/v4-attention.py`,
+  `patches-karmic/v4-model.py` and `patches/tilelang.py`.
+- the **thirteen image-baked engine files** are still `<FILL-IN: ...>`
+  markers: their bytes live inside the image, and an invented digest is
+  worse than no digest.
+
+So the gate is no longer a gate that cannot fail: with the shipped
+manifest it verifies the build stamp and the four patch digests, and says
+`NOT PINNED` for the thirteen it cannot check without an image.
+
+**What the gate reports.** The default run is the boot path's run — a
+claim whose value is still a `<FILL-IN: …>` marker is reported
+`NOT PINNED` and does not fail, so a fresh clone boots. An engine-file
+claim whose value is not a full lowercase sha256 is a **FAIL**, not a
+`NOT PINNED`; a build stamp is pinned by holding a concrete version
+string, and the two build stamps are reported `OK`. `--strict` turns every
+unpinned claim into a failure, so a strict run can never pass on a
+manifest that pins nothing, and `./launch/ds4flash-tp3-up identity` is
+exactly that strict run. A default `ENGINE-IDENTITY PASS` that still
+lists unpinned claims is **not** a verification: read the count in
+parentheses on the PASS line.
+
+Filling the rest needs a container that is already up, and is one command:
 
 ```sh
 # on the box that owns the container, with the lane up:
-python3 launch/tp3-kit/make-engine-identity.py --profile speed \
-  --container ds4flash-tp3-head --write
+python3 launch/tp3-kit/make-engine-identity.py --profile speed --container ds4flash-tp3-head --write
 # re-stage the kit so the boxes carry the filled manifest, then ask again:
 ./launch/ds4flash-tp3-up stage-env
 ./launch/ds4flash-tp3-up identity
@@ -484,6 +517,13 @@ bind-mounted TP=3 patches are part of the claim: change a patch and the
 gate fails until the manifest is regenerated. A re-pinned image fails
 the gate until it is re-audited — that is the intended adoption gate,
 not a bug.
+
+The capacity profile's tilelang digest is the recipe's own patch, and the
+capacity profile mounts it only when it has been staged. A gate failure
+on that one file means the patch was not staged (`./launch/ds4flash-tp3-up
+stage-env` stages it) or was overwritten: a container holding the image's
+own copy runs a different routing than the recipe audited, and that is
+worth failing on.
 
 ### Reading the container command without starting it
 
@@ -683,7 +723,9 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
   downloads the Ray wheels, records every sha256 (the boot installs from
   it with pip's index off)
 - `launch/tp3-kit/` — the in-container kit: `engine-identity.json` (the
-  manifest, a template until a reader fills it in),
+  manifest — pinned in part: both build stamps and the four bind-mounted
+  patch digests; the image-baked file digests are left for a reader to
+  fill in against a live container),
   `boot-gate-identity.py` (the gate that runs before the engine starts),
   `make-engine-identity.py` (the generator), `verify-wheelhouse.py`
   (the wheelhouse integrity check), `spec-short-prompt-check.py` (the
@@ -783,9 +825,10 @@ Full detail per rung in `docs/FIXLOG.md`. Tagged **[S]** speed,
   recipe's battery-before-trust stance on spec decode.
 - **MiaAI-Lab** — DS4-on-Spark bug documentation, the original 2-Spark
   1M-context recipe line, and the 4-box SGLang reference numbers.
-- A companion Vision-Exp TP=3 recipe (same authors) — native vision at
-  TP=3, the SP-prefill port, and the scheduler fairness patches (decode
-  deferral cadence + interactive admission) live there.
+- A companion [Vision-Exp TP=3 recipe](https://github.com/PrblyElect/DeepSeek-V4-Flash-Vision-TP3-3x-DGX-Spark)
+  (the same account) — native vision at TP=3, the SP-prefill port, and
+  the scheduler fairness patches (decode deferral cadence + interactive
+  admission) live there.
 
 Contained here: the 0731/V4.0 TP=3 port itself — the three ladders in
 `docs/FIXLOG.md` (29 rungs), the `patches-karmic/` set (V4→V4.1 pad delegation,
